@@ -115,44 +115,37 @@ def osint_lookup(
             return f"[OSINT] Domain lookup error for {clean}: {e}"
 
     # ── Search / general OSINT query ───────────────────────────────────────────
-    if mode == "search":
-        # Delegate to existing web search infrastructure if available
+    # ── Direct DDG search (no Gemini — avoids 429 quota) ───────────────────────
+    def _ddg_direct(query: str, max_results: int = 6) -> list[str]:
         try:
-            import actions.web_search as ws
-            result = ws.web_search({"query": target, "mode": "search"}, response=response, player=player, session_memory=session_memory)
-            header = f"OSINT — Search results for: {target}\n"
-            return header + result
-        except Exception as e:
-            # Fallback to simple DDG via direct request if module missing
-            try:
-                from duckduckgo_search import DDGS
-                results = []
-                with DDGS() as ddgs:
-                    for r in ddgs.text(target, max_results=5):
-                        results.append(f"• {r.get('title','')} — {r.get('href','')}")
-                if results:
-                    return f"OSINT — Search: {target}\n" + "\n".join(results[:5])
-            except Exception:
-                pass
-            return f"[OSINT] Search mode failed for '{target}': {e}. Try mode='ip' or 'domain'."
-
-    def _osint_search_fallback(q, t, label, resp, pl, sm):
-        try:
-            import actions.web_search as ws
-            result = ws.web_search({"query": q, "mode": "search"}, response=resp, player=pl, session_memory=sm)
-            return f"OSINT — {label}: {t}\n" + result
+            from duckduckgo_search import DDGS
+            results = []
+            with DDGS() as ddgs:
+                for r in ddgs.text(query, max_results=max_results):
+                    results.append(f"• {r.get('title','')} — {r.get('href','')}")
+            return results
         except Exception:
             try:
-                from duckduckgo_search import DDGS
+                from ddgs import DDGS
                 results = []
                 with DDGS() as ddgs:
-                    for r in ddgs.text(q, max_results=5):
+                    for r in ddgs.text(query, max_results=max_results):
                         results.append(f"• {r.get('title','')} — {r.get('href','')}")
-                if results:
-                    return f"OSINT — {label}: {t}\n" + "\n".join(results[:5])
+                return results
             except Exception:
-                pass
-            return f"[OSINT] {label} search failed for '{t}'. Try a different query."
+                return []
+
+    if mode == "search":
+        results = _ddg_direct(target, max_results=5)
+        if results:
+            return f"OSINT — Search: {target}\n" + "\n".join(results[:5])
+        return f"[OSINT] No DDG results for '{target}'. Check connection or try different query."
+
+    def _osint_search_fallback(q, t, label, resp, pl, sm):
+        results = _ddg_direct(q, max_results=5)
+        if results:
+            return f"OSINT — {label}: {t}\n" + "\n".join(results[:5])
+        return f"[OSINT] {label} search found nothing for '{t}'. Try different query."
 
     # ── Phone / Email / Person (public web search only) ────────────────────────
     if mode == "phone":
