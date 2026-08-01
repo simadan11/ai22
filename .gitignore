@@ -1,0 +1,9 @@
+# ── Face Vault: personal biometric data, never commit ─────────────────────────
+memory/face_vault/index.json
+memory/face_vault/index.tmp
+memory/face_vault/faces/
+memory/face_vault/haarcascade_frontalface_default.xml
+
+# Python
+__pycache__/
+*.py[cod]

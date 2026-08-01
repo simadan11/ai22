@@ -96,6 +96,56 @@
     }
     #dp-revoke:hover { opacity: 1; }
 
+    /* ── FACES PANEL ── */
+    #face-btn {
+      background: var(--surface); border: 1px solid var(--border); color: var(--text);
+      padding: 4px 9px; font-size: 13px; border-radius: 6px; cursor: pointer; line-height: 1.25;
+    }
+    #face-btn:active { transform: scale(0.95); }
+    #face-btn #face-count { font-size: 10px; font-weight: 700; color: #22d3ee; }
+    #face-panel {
+      position: fixed; top: 54px; right: 10px; z-index: 220;
+      width: min(340px, 92vw); max-height: 80vh; overflow-y: auto; display: none;
+      background: rgba(7,10,16,0.97); border: 1px solid var(--border);
+      border-radius: 12px; padding: 12px 14px;
+      box-shadow: 0 10px 40px rgba(0,0,0,0.6);
+      font-family: 'SFMono-Regular', Consolas, monospace;
+    }
+    #face-panel.open { display: block; animation: pop 0.18s ease; }
+    #face-panel::-webkit-scrollbar { width: 3px; }
+    #face-panel::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+    .fp-head { display:flex; align-items:center; justify-content:space-between; margin-bottom:8px; }
+    .fp-title { font-size: 10px; font-weight: 800; letter-spacing: 2px; color: var(--accent); }
+    .fp-toggle { background:transparent; border:1px solid var(--border); color:var(--muted);
+      font-size:9px; font-weight:800; letter-spacing:1px; padding:4px 8px; border-radius:6px; cursor:pointer; font-family:inherit; }
+    .fp-toggle.on { color: var(--green); border-color: rgba(34,197,94,0.3); }
+    .fp-note { font-size:9.5px; color:var(--muted); line-height:1.5; margin-bottom:10px; }
+    .fp-note b { color: #cdd6e3; font-weight: 700; }
+    .fp-empty { font-size:11px; color:var(--muted); padding:10px 2px; line-height:1.5; }
+    .fp-card {
+      display:flex; gap:10px; align-items:center; padding:8px;
+      background:var(--surface); border:1px solid var(--border); border-radius:10px; margin-bottom:7px;
+    }
+    .fp-thumb { width:46px; height:46px; border-radius:8px; object-fit:cover; flex-shrink:0;
+      background:#11151f; border:1px solid var(--border); }
+    .fp-thumb.ph { display:flex; align-items:center; justify-content:center; font-size:20px; }
+    .fp-body { flex:1; min-width:0; }
+    .fp-name-in {
+      width:100%; background:rgba(0,0,0,0.25); border:1px solid var(--border); border-radius:6px;
+      color:var(--text); font-size:12px; padding:5px 8px; outline:none; font-family:inherit;
+    }
+    .fp-name-in::placeholder { color:var(--muted); }
+    .fp-name-in:focus { border-color: var(--accent); }
+    .fp-meta { font-size:9px; color:var(--muted); margin-top:4px; display:flex; justify-content:space-between; }
+    .fp-del { background:transparent; color:var(--muted); border:1px solid var(--border);
+      border-radius:6px; font-size:11px; padding:6px 8px; cursor:pointer; flex-shrink:0; }
+    .fp-del:hover { color:#f87171; border-color:#7f2d2d; }
+    .fp-foot { display:flex; align-items:center; justify-content:space-between; margin-top:8px;
+      font-size:10px; color:var(--muted); }
+    .fp-clear { background:transparent; color:#f87171; border:1px solid #7f2d2d; border-radius:6px;
+      font-size:9px; font-weight:800; letter-spacing:1px; padding:5px 9px; cursor:pointer; font-family:inherit; opacity:0.85; }
+    .fp-clear:hover { opacity:1; }
+
     /* ── FEED ── */
     main { flex: 1; overflow-y: auto; padding: 14px 16px 8px; display: flex; flex-direction: column; gap: 10px; }
     main::-webkit-scrollbar { width: 3px; }
@@ -306,6 +356,7 @@
     <div class="enc-badge" id="enc">AES-256</div>
     <div class="spacer"></div>
     <button id="dev-btn" onclick="toggleDevPanel()" title="Connected devices hub">🛰 <span id="dev-count">0</span></button>
+    <button id="face-btn" onclick="toggleFacePanel()" title="Face vault — saved faces & names">👤 <span id="face-count">0</span></button>
     <button id="spk-btn" onclick="toggleSpk()" title="JARVIS voice on this device">🔊</button>
     <div class="url">__IP__:__PORT__</div>
   </header>
@@ -315,6 +366,19 @@
     <div id="dev-list"><div class="dp-empty">loading…</div></div>
     <div class="dp-paired">paired devices: <span id="dp-paired-n">0</span>
       <button id="dp-revoke" onclick="revokePaired()">REVOKE ALL</button>
+    </div>
+  </div>
+  <!-- ── Face vault panel ────────────────────────────────────────────── -->
+  <div id="face-panel">
+    <div class="fp-head">
+      <div class="fp-title">◈ FACE VAULT</div>
+      <button id="fp-toggle" class="fp-toggle" onclick="toggleFaceCapture()">CAPTURE ●</button>
+    </div>
+    <div class="fp-note">Detected faces are saved <b>unnamed</b>, locally on this PC only. A face seen again is recognised and not re-saved. <b>Name them yourself</b> — nothing and no one is looked up.</div>
+    <div id="fp-list"><div class="fp-empty">loading…</div></div>
+    <div class="fp-foot">
+      <span><span id="fp-count">0</span> saved</span>
+      <button class="fp-clear" onclick="clearFaces()">CLEAR ALL</button>
     </div>
   </div>
   <main id="feed"></main>
@@ -421,6 +485,14 @@
       if (m.type === 'sys')           sys(m.text);
       if (m.type === 'file_received') _onFileReceived(m);
       if (m.type === 'devices')       _setDevCount(m.count);
+      if (m.type === 'faces') {
+        // a face was added/deduped or renamed/deleted — keep the header count live
+        // and refresh the panel if it's open
+        _authFetch('/api/faces').then(r => r.json()).then(d => {
+          _setFaceCount((d.faces || []).length);
+          if (document.getElementById('face-panel').classList.contains('open')) loadFaces();
+        }).catch(() => {});
+      }
       if (m.type === 'vision_status') sys(m.state === 'error' ? m.text : 'Phone camera: ' + m.state + '…');
       if (m.type === 'live_dets') {
         // PC-side live detection shared back → draw boxes on the phone too
@@ -718,6 +790,108 @@
       } catch (_) {
         toast('Revoke failed');
       }
+    }
+
+    // ── Face vault panel ─────────────────────────────────────────────────────
+    function _setFaceCount(n) {
+      const c = document.getElementById('face-count');
+      if (c) c.textContent = (typeof n === 'number') ? n : 0;
+    }
+
+    function toggleFacePanel() {
+      const p = document.getElementById('face-panel');
+      p.classList.toggle('open');
+      // avoid overlap with the devices hub
+      document.getElementById('dev-panel').classList.remove('open');
+      if (p.classList.contains('open')) loadFaces();
+    }
+
+    function _fpThumb(id, hasImage) {
+      if (!hasImage) return '<div class="fp-thumb ph">👤</div>';
+      const src = `/api/faces/${id}/image?token=${encodeURIComponent(_authToken)}`;
+      return `<img class="fp-thumb" src="${src}" alt="">`;
+    }
+
+    async function loadFaces() {
+      const list = document.getElementById('fp-list');
+      try {
+        const r = await _authFetch('/api/faces');
+        const d = await r.json();
+        const tog = document.getElementById('fp-toggle');
+        tog.classList.toggle('on', !!d.enabled);
+        tog.textContent = d.enabled ? 'CAPTURE ●' : 'CAPTURE ○';
+        _setFaceCount((d.faces || []).length);
+        document.getElementById('fp-count').textContent = (d.faces || []).length;
+        if (!d.available) {
+          list.innerHTML = '<div class="fp-empty">opencv-python is not available on the PC — install it (<span style="color:#cdd6e3">pip install opencv-python</span>) to enable face capture.</div>';
+          return;
+        }
+        if (!d.faces || !d.faces.length) {
+          list.innerHTML = '<div class="fp-empty">No faces saved yet. Point the 📷 camera and tap SCAN or LIVE — new faces appear here unnamed, ready for you to label.</div>';
+          return;
+        }
+        list.innerHTML = '';
+        d.faces.forEach(f => {
+          const when = new Date((f.last_seen || 0) * 1000);
+          const card = document.createElement('div');
+          card.className = 'fp-card';
+          card.innerHTML =
+            _fpThumb(f.id, f.has_image) +
+            `<div class="fp-body">
+               <input class="fp-name-in" data-id="${f.id}" placeholder="Unnamed — type a name" value="${esc(f.name || '')}">
+               <div class="fp-meta"><span>seen ${f.count || 1}×</span><span>${esc(when.toLocaleDateString() + ' ' + when.toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'}))}</span></div>
+             </div>
+             <button class="fp-del" title="Delete this face">🗑</button>`;
+          const inp = card.querySelector('.fp-name-in');
+          inp.addEventListener('change', () => renameFace(f.id, inp.value));
+          inp.addEventListener('blur',   () => renameFace(f.id, inp.value));
+          card.querySelector('.fp-del').addEventListener('click', () => deleteFace(f.id));
+          list.appendChild(card);
+        });
+      } catch (_) {
+        list.innerHTML = '<div class="fp-empty">failed to load faces</div>';
+      }
+    }
+
+    async function renameFace(id, name) {
+      try {
+        await _authFetch('/api/faces/' + encodeURIComponent(id) + '/rename', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ name }),
+        });
+      } catch (_) {}
+    }
+
+    async function deleteFace(id) {
+      try {
+        await _authFetch('/api/faces/' + encodeURIComponent(id), { method: 'DELETE' });
+        toast('Face deleted');
+        loadFaces();
+      } catch (_) { toast('Delete failed'); }
+    }
+
+    async function clearFaces() {
+      if (!confirm('Delete ALL saved faces? This cannot be undone.')) return;
+      try {
+        await _authFetch('/api/faces/clear', { method: 'POST' });
+        toast('All faces cleared');
+        loadFaces();
+      } catch (_) { toast('Clear failed'); }
+    }
+
+    async function toggleFaceCapture() {
+      try {
+        const cur = document.getElementById('fp-toggle').classList.contains('on');
+        const r = await _authFetch('/api/faces/enabled', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ enabled: !cur }),
+        });
+        const d = await r.json();
+        const tog = document.getElementById('fp-toggle');
+        tog.classList.toggle('on', !!d.enabled);
+        tog.textContent = d.enabled ? 'CAPTURE ●' : 'CAPTURE ○';
+        toast(d.enabled ? 'Face capture ON' : 'Face capture OFF');
+      } catch (_) { toast('Toggle failed'); }
     }
 
     // ── Real-time Voice — PCM16 WebSocket → Gemini Live ──────────────────────

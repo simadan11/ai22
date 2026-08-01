@@ -46,6 +46,7 @@ It's not just an assistant — it's an extension of your digital life.
 | 🧑‍💻 Silent Language Memory | Detects spoken language on first use — all future sessions adapt automatically |
 | 📱 Remote Dashboard | Control the assistant from your phone via QR code pairing |
 | 📷 Phone Camera Vision | EDITH-style scan from the phone camera — labels people, cars & plates on a live HUD, JARVIS answers by voice on PC **and** phone |
+| 🗂️ Face Vault | Detects & saves every face **locally and unnamed**; recognises a face already seen so it isn't re-saved; you type the names yourself — fully private, no one is looked up |
 | ⚡ Auto-Start on Boot | Registers with the OS startup system (registry / LaunchAgent / .desktop) |
 | 📋 Clipboard Intelligence | Copy any text → floating panel with Translate / Summarise / Explain / Fix |
 | 🎨 Assistant Customization | Change the assistant name and your name from the UI — takes effect immediately |
@@ -64,6 +65,14 @@ The Remote Dashboard now turns your phone into JARVIS's eyes, Spider-Man style:
    - **LIVE stream** — the **LIVE** toggle (~3 fps) streams the phone camera onto the PC main window in real time; a background detection pass repaints **person / vehicle / animal / object** boxes every ~1.5 s on *both* the PC window and the phone HUD. Tap **⏹** to stop.
    - **Tap for info** — tap any object/vehicle/landmark tag on the phone and JARVIS looks it up and explains what it is (people and plates are intentionally not searchable).
    - **Voice answer** — the same frame is injected into the main Gemini Live session, so JARVIS speaks a concise tactical report out loud — both on the PC **and on the phone's speaker** (🔊 toggle in the dashboard header), with the transcript in the feed and on the HUD.
+
+### 🗂️ Face Vault — private, manual-label face library
+
+While EDITH scans or streams, every detected face is **cropped and saved locally** on the PC — always **without a name**. A face seen again is recognised by a local perceptual hash, so the same person is **not re-saved** (just a "seen N times" counter goes up). Open the **👤 Face Vault** panel in the dashboard and **type the name yourself**.
+
+> 🔒 **Privacy by design (unchanged):** faces are stored only on your machine, never uploaded, and the assistant **never** identifies anyone, looks anyone up, or links a face to an account. Naming is 100% manual. Toggle **CAPTURE** off anytime, or **CLEAR ALL** to wipe the vault. Data lives in `memory/face_vault/` (gitignored).
+
+**Under the hood:** OpenCV Haar face detection + a dependency-free DCT perceptual hash for dedup (no external face-matching service). Needs `opencv-python` (already a project dependency).
 
 ### 🛰 Devices Hub — every remote under control
 - **On the PC** — open **Remote Control**; the overlay now lists every connected phone (device type, IP, session time) with a **KICK** button per device and **REVOKE PAIRED DEVICES**.

@@ -583,7 +583,7 @@ class DashboardServer:
 
     async def broadcast(self, msg: dict) -> None:
         # transient pings are not replayed to freshly reconnecting phones
-        if msg.get("type") not in ("devices", "vision_status", "live_dets"):
+        if msg.get("type") not in ("devices", "vision_status", "live_dets", "faces"):
             self._history.append(msg)
             if len(self._history) > 300:
                 self._history = self._history[-300:]
@@ -886,6 +886,83 @@ class DashboardServer:
                     msg = msg[:200]
                 return JSONResponse({"ok": False, "error": msg}, status_code=502)
             return JSONResponse({"ok": True, "detections": detections})
+
+        # ── Face Vault (local, manual-label face library) ───────────────────────
+
+        @app.get("/api/faces")
+        async def list_faces(req: Request):
+            """List every saved face (unnamed until the owner labels it)."""
+            if not _auth(req):
+                return JSONResponse({"error": "Unauthorized"}, status_code=401)
+            try:
+                from actions.face_vault import get_vault
+                vault = get_vault()
+                return JSONResponse({
+                    "ok": True,
+                    "available": vault.available,
+                    "enabled": vault.enabled,
+                    "threshold": vault.threshold(),
+                    "faces": vault.list_entries(),
+                })
+            except Exception as e:
+                return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
+
+        @app.post("/api/faces/enabled")
+        async def set_faces_enabled(req: Request):
+            if not _auth(req):
+                return JSONResponse({"error": "Unauthorized"}, status_code=401)
+            try:
+                body = await req.json()
+            except Exception:
+                body = {}
+            from actions.face_vault import get_vault
+            return JSONResponse({"ok": True, "enabled": get_vault().set_enabled(bool(body.get("enabled")))})
+
+        @app.post("/api/faces/{face_id}/rename")
+        async def rename_face(face_id: str, req: Request):
+            """Owner types a name for a saved face (purely manual)."""
+            if not _auth(req):
+                return JSONResponse({"error": "Unauthorized"}, status_code=401)
+            try:
+                body = await req.json()
+            except Exception:
+                body = {}
+            from actions.face_vault import get_vault
+            name = str(body.get("name") or "")[:80]
+            ok = get_vault().rename(face_id, name)
+            await self.broadcast({"type": "faces"})
+            return JSONResponse({"ok": ok})
+
+        @app.delete("/api/faces/{face_id}")
+        async def delete_face(face_id: str, req: Request):
+            if not _auth(req):
+                return JSONResponse({"error": "Unauthorized"}, status_code=401)
+            from actions.face_vault import get_vault
+            ok = get_vault().delete(face_id)
+            await self.broadcast({"type": "faces"})
+            return JSONResponse({"ok": ok})
+
+        @app.post("/api/faces/clear")
+        async def clear_faces(req: Request):
+            if not _auth(req):
+                return JSONResponse({"error": "Unauthorized"}, status_code=401)
+            from actions.face_vault import get_vault
+            n = get_vault().clear()
+            await self.broadcast({"type": "faces"})
+            return JSONResponse({"ok": True, "deleted": n})
+
+        @app.get("/api/faces/{face_id}/image")
+        async def face_image(face_id: str, token: str = ""):
+            # query-param auth — <img src> can't send a Bearer header
+            tok = token.strip()
+            if not tok or tok not in self._tokens:
+                return JSONResponse({"error": "Unauthorized"}, status_code=401)
+            from actions.face_vault import get_vault
+            path = get_vault().image_path(face_id)
+            if not path:
+                return JSONResponse({"error": "Not found"}, status_code=404)
+            return FileResponse(str(path), media_type="image/jpeg")
+
 
         # ── Phone camera live stream → PC HUD ─────────────────────────────────
 

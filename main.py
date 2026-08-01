@@ -34,6 +34,7 @@ from memory.memory_manager import (
     save_session_summary, pop_last_session,
 )
 
+from actions.face_vault import get_vault
 from actions.file_processor import file_processor
 from actions.flight_finder     import flight_finder
 from actions.open_app          import open_app
@@ -578,6 +579,9 @@ class JarvisLive:
         self._proactive        = ProactiveEngine()
         self._last_user_speech = time.monotonic()  # updated on every user utterance
         self._session_log: list[str] = []          # conversation turns for end-of-session summary
+        self._face_vault = get_vault()             # local face library (manual labels)
+        self._face_ingest_last = 0.0               # throttle between ingest passes
+        self._face_ingest_task = None
 
     def _make_remote_key(self):
         """Called from Qt main thread when user presses Remote Control."""
@@ -1446,9 +1450,51 @@ class JarvisLive:
                     })
                 # EDITH snapshot with labeled boxes on the PC screen too
                 asyncio.create_task(self._pc_scan_overlay(frame))
+                # capture faces for the local vault (manual labels, no auto-ID)
+                await self._ingest_faces(frame)
             except Exception as e:
                 print(f"[Dashboard] Vision relay error: {e}")
                 await asyncio.sleep(0.5)
+
+    async def _ingest_faces(self, frame: bytes) -> None:
+        """Detect + save faces from a phone frame into the local Face Vault.
+
+        Same face seen again is recognised (not re-saved); new faces are stored
+        UNNAMED for the owner to label manually in the dashboard. Runs off the
+        event loop (cv2 work) and self-throttles inside the vault. No identity
+        is ever guessed -- purely capture + dedup + manual labeling.
+        """
+        vault = self._face_vault
+        if not vault.enabled or not vault.available:
+            return
+        now = time.monotonic()
+        if now - self._face_ingest_last < 4.0:
+            return  # at most one ingest pass every ~4 s
+        if self._face_ingest_task is not None and not self._face_ingest_task.done():
+            return  # previous pass still running
+        self._face_ingest_last = now
+
+        async def _run():
+            try:
+                results = await asyncio.to_thread(vault.ingest_frame, frame)
+            except Exception as e:
+                print(f"[FaceVault] ingest failed: {e}")
+                return
+            if not results:
+                return
+            new = [r for r in results if r.get("is_new")]
+            if new:
+                self.ui.write_log(
+                    f"[FaceVault]: {len(new)} new face saved "
+                    f"({len(results) - len(new)} known)"
+                )
+            # tell connected phones to refresh the Faces panel
+            try:
+                await self._dashboard.broadcast({"type": "faces"})
+            except Exception:
+                pass
+
+        self._face_ingest_task = asyncio.create_task(_run())
 
     async def _pc_scan_overlay(self, frame: bytes) -> None:
         """Detect people/vehicles/objects in the phone's frame and paint the
@@ -1518,6 +1564,8 @@ class JarvisLive:
         except Exception:
             pass
         await self._dashboard.broadcast({"type": "live_dets", "detections": dets})
+        # capture faces for the local vault (manual labels, no auto-ID)
+        await self._ingest_faces(frame)
 
     # ── dashboard command relay ─────────────────────────────────────────────
 
