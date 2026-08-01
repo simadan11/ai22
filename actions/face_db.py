@@ -54,6 +54,13 @@ _SFACE_THRESHOLD = 0.40
 # people still score ~0.997 against each other, so the bar has to sit very
 # high. It is a stop-gap — install the SFace model for real recognition.
 _GEOM_THRESHOLD = 0.9995
+# Appearance descriptors are only weakly discriminative: two different faces
+# still score ~0.82 against each other, so the bar must sit well above that.
+# Install the SFace model for genuinely reliable matching.
+# Measured: same face across rescaling + video compression ≈ 0.90, a
+# different face ≈ 0.82. 0.87 sits between the two. This descriptor is a
+# fallback — install the SFace model for a far wider safety margin.
+_APPEAR_THRESHOLD = 0.87
 
 
 def _model_ok(p) -> bool:
@@ -114,6 +121,10 @@ class FaceDB:
         self._backend = "none"
         self._encoder = "none"
         self._next_id = 1
+        # Which encoder produced the most recent vector. Vectors from
+        # different encoders live in the same collection but are NEVER
+        # compared to each other — their cosine distance is meaningless.
+        self._last_kind = "geom"
 
     # ── setup ───────────────────────────────────────────────────────────
     def _ensure(self) -> None:
@@ -237,11 +248,20 @@ class FaceDB:
                 # alignCrop()/feature() on the same net corrupts its internal
                 # blobs and crashes the process (0xC0000005 on Windows).
                 with self._infer_lock:
-                    return self._encode_sface(bgr, box, landmarks)
+                    v = self._encode_sface(bgr, box, landmarks)
+                self._last_kind = "sface"
+                return v
 
             # geometry encoder — needs the dense mesh
             if landmarks is not None and len(landmarks) >= 68:
+                self._last_kind = "geom"
                 return self._encode_geometry(landmarks)
+            # No mesh available (e.g. scanning a video frame where we only have
+            # a bounding box): fall back to an appearance descriptor so the
+            # face is still comparable instead of silently unencodable.
+            if box is not None:
+                self._last_kind = "appear"
+                return self._encode_appearance(bgr, box)
             return None
         except Exception as e:
             print(f"[FaceDB] encode failed: {e}")
@@ -274,6 +294,49 @@ class FaceDB:
                 return _norm([float(v) for v in np.asarray(feat).ravel()])
         except Exception as e:
             print(f"[FaceDB] sface encode failed: {e}")
+            return None
+
+    def _encode_appearance(self, bgr, box) -> list[float] | None:
+        """Crop → compact appearance descriptor (grid of gradient histograms).
+
+        Much weaker than SFace, but unlike raw pixels it tolerates lighting
+        shifts, and it lets box-only pipelines (video scan) still match.
+        """
+        cv2, np = self._cv2, self._np
+        try:
+            x, y, w, h = (int(v) for v in box)
+            H, W = bgr.shape[:2]
+            x0, y0 = max(0, x), max(0, y)
+            x1, y1 = min(W, x + w), min(H, y + h)
+            if x1 - x0 < 8 or y1 - y0 < 8:
+                return None
+            crop = bgr[y0:y1, x0:x1]
+            g = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
+            g = cv2.resize(g, (64, 64), interpolation=cv2.INTER_AREA)
+            g = cv2.equalizeHist(g)                       # lighting invariance
+            gx = cv2.Sobel(g, cv2.CV_32F, 1, 0, ksize=3)
+            gy = cv2.Sobel(g, cv2.CV_32F, 0, 1, ksize=3)
+            mag = np.sqrt(gx * gx + gy * gy)
+            ang = (np.arctan2(gy, gx) + np.pi) * (180.0 / np.pi)   # 0..360
+            bins = 8
+            vec = []
+            cells = 4
+            step = 64 // cells
+            for cy in range(cells):
+                for cx in range(cells):
+                    m = mag[cy * step:(cy + 1) * step, cx * step:(cx + 1) * step]
+                    a = ang[cy * step:(cy + 1) * step, cx * step:(cx + 1) * step]
+                    hist, _ = np.histogram(a, bins=bins, range=(0, 360),
+                                           weights=m)
+                    vec.extend(float(v) for v in hist)
+            if len(vec) < self._dim:
+                vec.extend([0.0] * (self._dim - len(vec)))
+            vec = vec[: self._dim]
+            m = sum(vec) / len(vec)
+            vec = [v - m for v in vec]
+            sd = math.sqrt(sum(v * v for v in vec) / len(vec)) or 1.0
+            return _norm([v / sd for v in vec])
+        except Exception:
             return None
 
     def _encode_geometry(self, pts) -> list[float] | None:
@@ -324,14 +387,16 @@ class FaceDB:
                         collection_name=_COLLECTION,
                         data=[{"id": self._next_id,
                                "vector": vector,
-                               "name": name}],
+                               "name": name,
+                               "enc": self._last_kind}],
                     )
                     try:
                         self._client.load_collection(collection_name=_COLLECTION)
                     except Exception:
                         pass
                 else:
-                    self._json.append({"name": name, "vector": vector})
+                    self._json.append({"name": name, "vector": vector,
+                                       "enc": self._last_kind})
                     self._save_json()
             return True
         except Exception as e:
@@ -343,7 +408,9 @@ class FaceDB:
         self._ensure()
         if not vector or len(vector) != self._dim:
             return None, 0.0
-        thr = _SFACE_THRESHOLD if self._encoder == "sface" else _GEOM_THRESHOLD
+        thr = {"sface": _SFACE_THRESHOLD,
+               "geom": _GEOM_THRESHOLD,
+               "appear": _APPEAR_THRESHOLD}.get(self._last_kind, _GEOM_THRESHOLD)
         try:
             with self._lock:
                 if self._backend == "milvus" and self._client is not None:
@@ -351,7 +418,8 @@ class FaceDB:
                         collection_name=_COLLECTION,
                         data=[vector],
                         limit=3,
-                        output_fields=["name"],
+                        output_fields=["name", "enc"],
+                        filter=f'enc == "{self._last_kind}"',
                     )
                     hits = res[0] if res else []
                     if not hits:
@@ -366,6 +434,8 @@ class FaceDB:
                 for row in self._json:
                     v = row.get("vector")
                     if not v or len(v) != len(vector):
+                        continue
+                    if row.get("enc", "geom") != self._last_kind:
                         continue
                     s = _cosine(vector, v)
                     if s > best_score:

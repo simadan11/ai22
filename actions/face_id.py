@@ -561,6 +561,15 @@ def enroll_with_mesh(frame_bytes: bytes, name: str, faces: list[dict]) -> bool:
         if not vec:
             return False
         ok = db.add(name, vec)
+        # Video scanning only has bounding boxes (no mesh), so ALSO store an
+        # appearance vector under the same name — otherwise the person could
+        # never be found in a clip.
+        try:
+            vec2 = db.encode(bgr, box=(x, y, w, h))
+            if vec2 and db._last_kind != "geom":
+                db.add(name, vec2)
+        except Exception:
+            pass
         if ok:
             # keep a thumbnail too, so the LBPH net still has something
             try:

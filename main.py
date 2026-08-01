@@ -240,6 +240,43 @@ TOOL_DECLARATIONS = [
         }
     },
     {
+        "name": "find_face_in_video",
+        "description": (
+            "Scans a video the USER provides (a local file path, or a link "
+            "they paste) and reports at which timestamps a person from the "
+            "local face database appears. Use when the user says: find me in "
+            "this video, is <name> in this clip, check this video for my face, "
+            "найди меня в этом видео, есть ли тут <имя>. "
+            "It only matches people already enrolled by the user; it cannot "
+            "search TikTok/YouTube for strangers."
+        ),
+        "parameters": {
+            "type": "OBJECT",
+            "properties": {
+                "source": {"type": "STRING",
+                           "description": "Video file path or URL to scan"},
+                "every_seconds": {"type": "NUMBER",
+                                  "description": "Sampling interval, default 1"}
+            },
+            "required": []
+        }
+    },
+    {
+        "name": "find_face_in_image",
+        "description": (
+            "Checks a single photo the user provides for anyone in the local "
+            "face database. Use for: who is in this photo, is that me, "
+            "кто на этом фото."
+        ),
+        "parameters": {
+            "type": "OBJECT",
+            "properties": {
+                "source": {"type": "STRING", "description": "Image path or URL"}
+            },
+            "required": []
+        }
+    },
+    {
         "name": "who_is_this",
         "description": (
             "Says who the person in front of the camera is, using the face "
@@ -866,6 +903,42 @@ class JarvisLive:
                     else:
                         result = ("I could not read a clear face. Move closer, "
                                   "face the camera and try again.")
+
+            elif name == "find_face_in_video":
+                src = (args.get("source") or args.get("url")
+                       or args.get("path") or "").strip()
+                if not src and self.ui.current_file:
+                    src = self.ui.current_file
+                if not src:
+                    result = ("Give me a video file or a link to scan, or drop "
+                              "the file onto the window first.")
+                else:
+                    from actions.face_search import scan_video
+                    every = float(args.get("every_seconds") or 1.0)
+                    r = await loop.run_in_executor(
+                        None, lambda: scan_video(src, every_seconds=every)
+                    )
+                    result = r.get("message") or "Scan finished."
+                    hits = r.get("best") or []
+                    if hits:
+                        self.ui.show_content(
+                            "FACE SCAN",
+                            "\n".join(f"{h['name']} — {h['at_hms']} "
+                                       f"({h['score']:.0f}%)" for h in hits),
+                        )
+
+            elif name == "find_face_in_image":
+                src = (args.get("source") or args.get("path") or "").strip()
+                if not src and self.ui.current_file:
+                    src = self.ui.current_file
+                if not src:
+                    result = "Give me an image path to check."
+                else:
+                    from actions.face_search import scan_image
+                    r = await loop.run_in_executor(
+                        None, lambda: scan_image(src)
+                    )
+                    result = r.get("message") or "Done."
 
             elif name == "who_is_this":
                 faces_now = list(getattr(self, "_last_faces", []) or [])
