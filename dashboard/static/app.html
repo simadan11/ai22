@@ -50,6 +50,12 @@
     .enc-badge.on  { display: block; background: rgba(34,197,94,0.1); border: 1px solid rgba(34,197,94,0.25); color: var(--green); }
     .enc-badge.off { display: block; background: rgba(255,100,100,0.08); border: 1px solid rgba(255,100,100,0.2); color: #f87171; }
     .url { font-size: 10px; font-family: monospace; color: var(--muted); padding: 4px 9px; background: var(--surface); border: 1px solid var(--border); border-radius: 6px; }
+    #spk-btn {
+      background: var(--surface); border: 1px solid var(--border); color: var(--text);
+      padding: 4px 9px; font-size: 13px; border-radius: 6px; cursor: pointer; line-height: 1.25;
+    }
+    #spk-btn:active { transform: scale(0.95); }
+    #spk-btn.muted  { opacity: 0.45; }
 
     /* ── FEED ── */
     main { flex: 1; overflow-y: auto; padding: 14px 16px 8px; display: flex; flex-direction: column; gap: 10px; }
@@ -149,6 +155,9 @@
     }
     @keyframes tag-pop { from { opacity: 0; transform: scale(1.15); } }
     .tag-p { border-color: #f97316; box-shadow: 0 0 12px rgba(249,115,22,0.35); }
+    .tag-v { border-color: #facc15; box-shadow: 0 0 12px rgba(250,204,21,0.35); }
+    .tag-v .tag-l { background: #facc15; }
+    .tag-v .tag-d { color: #fde68a; }
     .tag-l {
       position: absolute; top: -1.5px; left: -1.5px; transform: translateY(-100%);
       font-size: 10px; font-weight: 700; letter-spacing: 1px; color: #04070c;
@@ -243,6 +252,7 @@
     <div class="pill" id="pill"><span class="dot"></span><span id="st">Connecting</span></div>
     <div class="enc-badge" id="enc">AES-256</div>
     <div class="spacer"></div>
+    <button id="spk-btn" onclick="toggleSpk()" title="JARVIS voice on this device">🔊</button>
     <div class="url">__IP__:__PORT__</div>
   </header>
   <main id="feed"></main>
@@ -334,11 +344,13 @@
     const _wsProto = location.protocol === 'https:' ? 'wss' : 'ws';
     const _wsUrl   = `${_wsProto}://${location.host}/ws?token=${encodeURIComponent(_authToken)}`;
     const ws       = new WebSocket(_wsUrl);
+    ws.binaryType  = 'arraybuffer';   // JARVIS voice streams as binary PCM
 
     ws.onopen    = () => { sys('Remote session active.'); toast('Connected to JARVIS'); };
     ws.onclose   = () => sys('Connection lost — refresh to reconnect.');
     ws.onerror   = () => sys('Connection error.');
     ws.onmessage = (e) => {
+      if (typeof e.data !== 'string') { _playSpk(e.data); return; }  // voice frame
       const m = JSON.parse(e.data);
       if (m.type === 'log')           append(m.speaker, m.text);
       if (m.type === 'status')        setStatus(m.state);
@@ -531,6 +543,46 @@
       clearTimeout(_toastTimer);
       _toastTimer = setTimeout(() => t.classList.remove('show'), 2800);
     }
+
+    // ── JARVIS voice on phone — 24 kHz PCM16 binary frames over /ws ──────────
+    let _spkOn   = true;
+    let _spkCtx  = null;
+    let _spkNext = 0;   // scheduled end-time of the last queued buffer
+
+    function toggleSpk() {
+      _spkOn = !_spkOn;
+      const b = document.getElementById('spk-btn');
+      b.textContent = _spkOn ? '🔊' : '🔇';
+      b.classList.toggle('muted', !_spkOn);
+      toast(_spkOn ? 'JARVIS voice: ON' : 'JARVIS voice: OFF');
+    }
+
+    function _playSpk(buf) {
+      if (!_spkOn) return;
+      try {
+        if (!_spkCtx) _spkCtx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 24000 });
+        const ctx = _spkCtx;
+        if (ctx.state === 'suspended') ctx.resume();   // unlocked by pointerdown below
+        const i16 = new Int16Array(buf);
+        const f32 = new Float32Array(i16.length);
+        for (let i = 0; i < i16.length; i++) f32[i] = i16[i] / 32768;
+        const ab = ctx.createBuffer(1, f32.length, 24000);
+        ab.getChannelData(0).set(f32);
+        const src = ctx.createBufferSource();
+        src.buffer = ab;
+        src.connect(ctx.destination);
+        // fell >1.5 s behind (network hiccup) → resync instead of lagging
+        if (_spkNext - ctx.currentTime > 1.5 || _spkNext < ctx.currentTime)
+          _spkNext = ctx.currentTime + 0.05;
+        src.start(_spkNext);
+        _spkNext += ab.duration;
+      } catch (_) {}
+    }
+
+    // mobile browsers keep AudioContext suspended until the first user gesture
+    document.addEventListener('pointerdown', () => {
+      if (_spkCtx && _spkCtx.state === 'suspended') _spkCtx.resume();
+    }, { passive: true });
 
     // ── Real-time Voice — PCM16 WebSocket → Gemini Live ──────────────────────
     const micBtn  = document.getElementById('mic-btn');
@@ -807,7 +859,7 @@
       const dw = vw * scale, dh = vh * scale;
       const offX = (dw - cw) / 2, offY = (dh - ch) / 2;
       const mirror = (_facing === 'user');
-      let persons = 0, drawn = 0;
+      let persons = 0, vehicles = 0, drawn = 0;
       _lastDets.slice(0, 12).forEach(d => {
         if (!Array.isArray(d.box) || d.box.length !== 4) return;
         let [ymin, xmin, ymax, xmax] = d.box.map(Number);
@@ -817,7 +869,8 @@
         if (xmax - xmin < 5 || ymax - ymin < 5) return;
         if (mirror) { const t = xmin; xmin = 1000 - xmax; xmax = 1000 - t; }
         const el = document.createElement('div');
-        el.className = 'tag' + (d.kind === 'person' ? ' tag-p' : '');
+        el.className = 'tag' +
+          (d.kind === 'person' ? ' tag-p' : d.kind === 'vehicle' ? ' tag-v' : '');
         el.style.left   = ((xmin / 1000) * dw - offX) + 'px';
         el.style.top    = ((ymin / 1000) * dh - offY) + 'px';
         el.style.width  = (((xmax - xmin) / 1000) * dw) + 'px';
@@ -835,9 +888,10 @@
         camBoxes.appendChild(el);
         drawn++;
         if (d.kind === 'person') persons++;
+        else if (d.kind === 'vehicle') vehicles++;
       });
       camTargets.textContent = drawn
-        ? `TARGETS: ${drawn} ▸ ${persons} PERSON · ${drawn - persons} OBJECT`
+        ? `TARGETS: ${drawn} ▸ ${persons} PERSON · ${vehicles} VEHICLE · ${drawn - persons - vehicles} OBJECT`
         : 'NO TARGETS';
       if (drawn) camStatus.textContent = 'ANALYSIS COMPLETE — ANSWER INCOMING';
     }

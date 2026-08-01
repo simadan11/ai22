@@ -372,16 +372,22 @@ _MAX_FRAME_BYTES = 8 * 1024 * 1024   # decoded JPEG cap
 
 _HUD_PROMPT = (
     "You are a tactical augmented-reality vision system (like EDITH from Spider-Man). "
-    "Look at the photo and list every PERSON and every notable OBJECT, animal, "
-    "readable text block or screen. Return ONLY a JSON array. Each element has exactly: "
-    '"label": 2-5 word uppercase name, e.g. "PERSON — RED JACKET", "LAPTOP", "CAR KEYS"; '
-    '"kind": "person" or "object"; '
-    '"detail": one short phrase (max 10 words) with visible appearance/context, '
-    'e.g. "male, glasses, holding coffee cup"; '
+    "Look at the photo and list every PERSON, every VEHICLE (plus any readable "
+    "license plate), and every notable OBJECT, animal, readable text block or "
+    "screen. Return ONLY a JSON array. Each element has exactly: "
+    '"label": 2-6 word uppercase name (rules below); '
+    '"kind": "person", "vehicle" or "object"; '
+    '"detail": one short phrase (max 10 words) with visible appearance/context; '
     '"box": [ymin, xmin, ymax, xmax] as integers 0-1000 in normalized image '
     "coordinates, tight around the target. "
-    "Rules: for people describe ONLY visible appearance/clothing/pose — never guess "
-    "real names or identities. Prefer precise small boxes over big loose ones. "
+    "Label rules: person → 'PERSON — <clothing/color/pose>' (never a real name); "
+    "vehicle → 'CAR / BIKE / TRUCK / BUS — <color> <make & model if recognizable>'; "
+    "license/number plate → 'PLATE — <exact characters>' with kind 'vehicle', but "
+    "ONLY if the characters are actually readable in the image; "
+    "famous landmark, product or logo → its real well-known name; "
+    "anything else → short common name like 'LAPTOP', 'CAR KEYS'. "
+    "For people describe ONLY visible appearance/clothing/pose — never guess names "
+    "or identities. Prefer precise small boxes over big loose ones. "
     "Max 12 items. If nothing notable is visible return []."
 )
 
@@ -447,9 +453,12 @@ def _edith_detect(image_bytes: bytes) -> list[dict]:
             box = [float(x) for x in box]
         except (TypeError, ValueError):
             continue
+        kind = str(item.get("kind", "")).lower()
+        if kind not in ("person", "vehicle"):
+            kind = "object"
         out.append({
             "label":  str(item.get("label") or "TARGET")[:60],
-            "kind":   "person" if str(item.get("kind", "")).lower() == "person" else "object",
+            "kind":   kind,
             "detail": str(item.get("detail") or "")[:120],
             "box":    box,
         })
@@ -476,6 +485,7 @@ class DashboardServer:
         self._device_sessions: dict[str, dict] = {}  # device_token → {session_key}
         self._phone_audio_queue: asyncio.Queue    = asyncio.Queue(maxsize=200)
         self._phone_vision_queue: asyncio.Queue   = asyncio.Queue(maxsize=10)
+        self._audio_out_queue: asyncio.Queue      = asyncio.Queue(maxsize=400)  # JARVIS voice → phones
         self._uploads_dir                 = UPLOADS_DIR
         self._login_html                  = _read("login.html")
         self._app_html                    = _read("app.html")
@@ -526,6 +536,30 @@ class DashboardServer:
 
     def set_connect_callback(self, fn) -> None:
         self._connect_callback = fn
+
+    # ── JARVIS voice → phones ─────────────────────────────────────────────
+
+    def feed_audio(self, chunk: bytes) -> None:
+        """main.py drops every JARVIS speech PCM slice here (24 kHz int16 mono).
+        Non-blocking: a slow phone must never stall the assistant's voice."""
+        try:
+            self._audio_out_queue.put_nowait(chunk)
+        except asyncio.QueueFull:
+            pass  # phone lags more than ~8 s behind — drop rather than back up
+
+    async def _audio_broadcast_loop(self) -> None:
+        """Fan out JARVIS voice PCM to every connected phone (binary WS frames)."""
+        while True:
+            chunk = await self._audio_out_queue.get()
+            if not self._clients:
+                continue
+            dead: set[WebSocket] = set()
+            for ws in list(self._clients):
+                try:
+                    await ws.send_bytes(chunk)
+                except Exception:
+                    dead.add(ws)
+            self._clients -= dead
 
     # ── broadcast ────────────────────────────────────────────────────────
 
@@ -957,4 +991,5 @@ class DashboardServer:
         proto = "https" if use_ssl else "http"
         print(f"[Dashboard] {proto}://{self._ip}:{PORT}")
         print("[Dashboard] Press 'Remote Control' in JARVIS UI to get the QR code.")
+        asyncio.create_task(self._audio_broadcast_loop())
         await uvicorn.Server(cfg).serve()

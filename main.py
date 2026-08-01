@@ -941,7 +941,11 @@ class JarvisLive:
                             _audio_data = response.data
                             _SLICE = 2400
                             for _i in range(0, len(_audio_data), _SLICE):
-                                self.audio_in_queue.put_nowait(_audio_data[_i : _i + _SLICE])
+                                _slice = _audio_data[_i : _i + _SLICE]
+                                self.audio_in_queue.put_nowait(_slice)
+                                if self._dashboard:
+                                    # same slice → JARVIS voice plays on the phone too
+                                    self._dashboard.feed_audio(_slice)
 
                     if response.server_content:
                         sc = response.server_content
@@ -1378,8 +1382,9 @@ class JarvisLive:
         import base64 as _b64
         q = self._dashboard._phone_vision_queue
         _DEFAULT_Q = (
-            "Identify everything visible — every person (describe appearance only, "
-            "never guess identity) and every notable object."
+            "Identify everything visible — every person (appearance only, no "
+            "identities), every vehicle (color, make/model — quote the license "
+            "plate characters if legible), animals and notable objects."
         )
         while True:
             try:
@@ -1417,7 +1422,10 @@ class JarvisLive:
                     "world and pressed SCAN. The attached image is what their phone "
                     "sees right now. Answer in the user's language, concisely, like "
                     "a tactical heads-up display report. Identify visible people by "
-                    "appearance/clothing/pose only — never guess a real name or identity. "
+                    "appearance/clothing/pose only — never guess a real name or "
+                    "identity, and never dig up personal data about anyone. "
+                    "For vehicles: color and make/model when recognizable; if a "
+                    "license plate is legible, quote its characters only. "
                     f"User's question: {question or _DEFAULT_Q}"
                 )
                 b64 = _b64.b64encode(frame).decode("ascii")
