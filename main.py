@@ -1471,6 +1471,13 @@ class JarvisLive:
         live = False
         last_det = 0.0
         det_task = None
+        
+        # Load Haar cascades for face & eye tracking zoom
+        import cv2
+        import numpy as np
+        face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_frontalface_default.xml')
+        eye_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_eye.xml')
+
         while True:
             try:
                 frame = await asyncio.wait_for(q.get(), timeout=0.8)
@@ -1487,6 +1494,36 @@ class JarvisLive:
                 print(f"[Dashboard] Cam queue error: {e}")
                 await asyncio.sleep(0.5)
                 continue
+                
+            # Process frame to detect eye and zoom
+            try:
+                np_arr = np.frombuffer(frame, np.uint8)
+                img = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
+                if img is not None:
+                    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+                    faces = face_cascade.detectMultiScale(gray, 1.3, 5)
+                    for (x, y, w, h) in faces:
+                        roi_gray = gray[y:y+h, x:x+w]
+                        roi_color = img[y:y+h, x:x+w]
+                        eyes = eye_cascade.detectMultiScale(roi_gray, 1.1, 4)
+                        if len(eyes) > 0:
+                            ex, ey, ew, eh = eyes[0]
+                            margin_x = int(ew * 0.5)
+                            margin_y = int(eh * 0.5)
+                            eye_y1 = max(0, ey - margin_y)
+                            eye_y2 = min(roi_color.shape[0], ey + eh + margin_y)
+                            eye_x1 = max(0, ex - margin_x)
+                            eye_x2 = min(roi_color.shape[1], ex + ew + margin_x)
+                            eye_crop = roi_color[eye_y1:eye_y2, eye_x1:eye_x2]
+                            if eye_crop.size > 0:
+                                zoomed = cv2.resize(eye_crop, (img.shape[1], img.shape[0]), interpolation=cv2.INTER_LINEAR)
+                                cv2.putText(zoomed, "Eye Track & Zoom (Phone)", (20, 40), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
+                                _, buf = cv2.imencode('.jpg', zoomed, [cv2.IMWRITE_JPEG_QUALITY, 65])
+                                frame = buf.tobytes()
+                            break
+            except Exception as e:
+                pass # fall back to original frame
+                
             if not live:
                 live = True
                 try:

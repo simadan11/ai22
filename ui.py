@@ -2090,13 +2090,44 @@ class MainWindow(QMainWindow):
                 cap = cv2.VideoCapture(0)
             if not cap.isOpened():
                 return
+                
+            face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_frontalface_default.xml')
+            eye_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_eye.xml')
+
             # warm-up frames
             for _ in range(5):
                 cap.read()
             while not self._cam_stop.wait(0.033) and cap.isOpened():
                 ret, frame = cap.read()
                 if ret and frame is not None:
-                    _, buf = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 65])
+                    output_frame = frame
+                    try:
+                        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+                        faces = face_cascade.detectMultiScale(gray, 1.3, 5)
+                        
+                        for (x, y, w, h) in faces:
+                            roi_gray = gray[y:y+h, x:x+w]
+                            roi_color = frame[y:y+h, x:x+w]
+                            eyes = eye_cascade.detectMultiScale(roi_gray, 1.1, 4)
+                            if len(eyes) > 0:
+                                ex, ey, ew, eh = eyes[0]
+                                margin_x = int(ew * 0.5)
+                                margin_y = int(eh * 0.5)
+                                
+                                eye_y1 = max(0, ey - margin_y)
+                                eye_y2 = min(roi_color.shape[0], ey + eh + margin_y)
+                                eye_x1 = max(0, ex - margin_x)
+                                eye_x2 = min(roi_color.shape[1], ex + ew + margin_x)
+                                
+                                eye_crop = roi_color[eye_y1:eye_y2, eye_x1:eye_x2]
+                                if eye_crop.size > 0:
+                                    output_frame = cv2.resize(eye_crop, (frame.shape[1], frame.shape[0]), interpolation=cv2.INTER_LINEAR)
+                                    cv2.putText(output_frame, "Eye Track & Zoom", (20, 40), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
+                                break
+                    except Exception as e:
+                        pass # fallback to original frame
+                        
+                    _, buf = cv2.imencode(".jpg", output_frame, [cv2.IMWRITE_JPEG_QUALITY, 65])
                     self._cam_frame_sig.emit(buf.tobytes())
             cap.release()
         except Exception as e:
