@@ -456,6 +456,19 @@ class HudCanvas(QWidget):
 
         r_face = fw * 0.31
 
+        # ── solid (never transparent) core disc behind the orb ────────────
+        r_solid = r_face * 1.12 * self._scale
+        disc = QRadialGradient(cx, cy - r_solid * 0.35, r_solid * 1.7)
+        disc.setColorAt(0.0, qcol(C.PANEL2, 255))
+        disc.setColorAt(0.6, qcol(C.DARK, 255))
+        disc.setColorAt(1.0, qcol(C.BG, 255))
+        p.setPen(Qt.PenStyle.NoPen)
+        p.setBrush(QBrush(disc))
+        p.drawEllipse(QRectF(cx - r_solid, cy - r_solid, r_solid * 2, r_solid * 2))
+        p.setBrush(Qt.BrushStyle.NoBrush)
+        p.setPen(QPen(qcol(C.MUTED_C if self.muted else C.PRI, 220), 1.6))
+        p.drawEllipse(QRectF(cx - r_solid, cy - r_solid, r_solid * 2, r_solid * 2))
+
         # halo glow
         for i in range(10):
             r   = r_face * (1.8 - i * 0.08)
@@ -542,8 +555,7 @@ class HudCanvas(QWidget):
             for i in range(8, 0, -1):
                 r2  = int(orb_r * i / 8)
                 frc = i / 8
-                a   = max(0, min(255, int(self._halo * 1.1 * frc)))
-                p.setBrush(QBrush(QColor(int(oc[0]*frc), int(oc[1]*frc), int(oc[2]*frc), a)))
+                p.setBrush(QBrush(QColor(int(oc[0]*frc), int(oc[1]*frc), int(oc[2]*frc), 255)))
                 p.setPen(Qt.PenStyle.NoPen)
                 p.drawEllipse(QRectF(cx - r2, cy - r2, r2 * 2, r2 * 2))
             p.setPen(QPen(qcol(C.PRI, min(255, int(self._halo * 2))), 1))
@@ -595,6 +607,101 @@ class HudCanvas(QWidget):
                 hgt = int(3 + 2 * math.sin(self._tick * 0.09 + i * 0.6))
                 cl  = qcol(C.BORDER_B)
             p.fillRect(QRectF(wx0 + i * bw, wy + 20 - hgt, bw - 1, hgt), cl)
+
+class _GearButton(QWidget):
+    """Floating animated settings button — the only chrome besides the orb."""
+
+    clicked = pyqtSignal()
+    SIZE = 46
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setFixedSize(self.SIZE, self.SIZE)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setToolTip("Settings & Controls")
+        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, False)
+        self._angle   = 0.0
+        self._hover   = 0.0        # 0..1 eased hover amount
+        self._active  = False
+        self._press   = 0.0
+        self._pulse   = 0.0
+        self._tmr = QTimer(self)
+        self._tmr.timeout.connect(self._step)
+        self._tmr.start(16)
+
+    def set_active(self, on: bool):
+        self._active = on
+        self.update()
+
+    def _step(self):
+        target = 1.0 if (self.underMouse() or self._active) else 0.0
+        self._hover += (target - self._hover) * 0.18
+        self._press *= 0.86
+        self._pulse = (self._pulse + 0.03) % (2 * math.pi)
+        spin = 0.4 + 2.6 * self._hover
+        self._angle = (self._angle + spin) % 360
+        self.update()
+
+    def mousePressEvent(self, e):
+        if e.button() == Qt.MouseButton.LeftButton:
+            self._press = 1.0
+
+    def mouseReleaseEvent(self, e):
+        if e.button() == Qt.MouseButton.LeftButton and self.rect().contains(e.pos()):
+            self.clicked.emit()
+
+    def paintEvent(self, _):
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        W = self.width(); cx = cy = W / 2
+        hov = max(0.0, min(1.0, self._hover))
+        breathe = 0.5 + 0.5 * math.sin(self._pulse)
+
+        # soft outer glow
+        for i in range(6, 0, -1):
+            r = (W / 2 - 2) * (0.72 + i * 0.045) * (1 + 0.02 * self._press)
+            a = int((10 + 26 * hov + 8 * breathe) * (i / 6))
+            p.setPen(Qt.PenStyle.NoPen)
+            p.setBrush(QBrush(qcol(C.PRI, a)))
+            p.drawEllipse(QPointF(cx, cy), r, r)
+
+        # solid disc (never transparent)
+        r_disc = W / 2 - 5
+        grad = QRadialGradient(cx, cy - r_disc * 0.3, r_disc * 1.6)
+        grad.setColorAt(0.0, qcol(C.PANEL2, 255))
+        grad.setColorAt(1.0, qcol(C.BG, 255))
+        p.setBrush(QBrush(grad))
+        p.setPen(QPen(qcol(C.PRI, int(140 + 100 * hov)), 1.4))
+        p.drawEllipse(QPointF(cx, cy), r_disc, r_disc)
+
+        # rotating dashed ring
+        p.setPen(QPen(qcol(C.PRI, int(90 + 120 * hov)), 1.6))
+        p.setBrush(Qt.BrushStyle.NoBrush)
+        rr = r_disc - 3
+        rect = QRectF(cx - rr, cy - rr, rr * 2, rr * 2)
+        base = self._angle
+        for k in range(4):
+            p.drawArc(rect, int((base + k * 90) * 16), int(52 * 16))
+
+        # gear glyph
+        p.save()
+        p.translate(cx, cy)
+        p.rotate(self._angle * 0.6)
+        col = qcol(C.PRI, int(200 + 55 * hov))
+        p.setPen(QPen(col, 2.0))
+        p.setBrush(Qt.BrushStyle.NoBrush)
+        r_out = r_disc * 0.60
+        r_in  = r_disc * 0.34
+        for i in range(8):
+            a = math.radians(i * 45)
+            p.drawLine(QPointF(math.cos(a) * r_in,  math.sin(a) * r_in),
+                       QPointF(math.cos(a) * r_out, math.sin(a) * r_out))
+        p.drawEllipse(QPointF(0, 0), r_in, r_in)
+        p.setBrush(QBrush(qcol(C.PRI, int(120 + 100 * hov))))
+        p.setPen(Qt.PenStyle.NoPen)
+        p.drawEllipse(QPointF(0, 0), r_in * 0.34, r_in * 0.34)
+        p.restore()
+
 
 class MetricBar(QWidget):
 
@@ -1892,16 +1999,16 @@ class MainWindow(QMainWindow):
         root = QVBoxLayout(central)
         root.setContentsMargins(0, 0, 0, 0)
         root.setSpacing(0)
-        root.addWidget(self._build_header())
 
-        body = QHBoxLayout()
-        body.setContentsMargins(0, 0, 0, 0)
-        body.setSpacing(0)
+        # Header/footer/side panels are still constructed (their widgets are
+        # used by the rest of the app) but they now live INSIDE the settings
+        # panel instead of cluttering the main view.
+        self._header      = self._build_header()
+        self._left_panel  = self._build_left_panel()
+        self._right_panel = self._build_right_panel()
+        self._header.hide()
 
-        self._left_panel = self._build_left_panel()
-        body.addWidget(self._left_panel, stretch=0)
-
-        # Center column: HUD + resizable content panel via QSplitter
+        # Center: HUD (the orb) + optional content panel
         self.hud = HudCanvas(face_path, _display)
         self.hud.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         self._content_panel = self._build_content_panel()
@@ -1932,6 +2039,7 @@ class MainWindow(QMainWindow):
         _cam_x.clicked.connect(self._close_feed_view)
         _cam_hdr.addWidget(_cam_x)
         _cam_v.addLayout(_cam_hdr)
+        self._cam_title    = _cam_title
         self._cam_live_lbl = QLabel()
         self._cam_live_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._cam_live_lbl.setStyleSheet("background: transparent;")
@@ -1940,7 +2048,7 @@ class MainWindow(QMainWindow):
         )
         _cam_v.addWidget(self._cam_live_lbl, stretch=1)
 
-        # Stack: 0 = animated HUD, 1 = live camera
+        # Stack: 0 = animated HUD (orb), 1 = live camera
         self._hud_cam_stack = QStackedWidget()
         self._hud_cam_stack.addWidget(self.hud)
         self._hud_cam_stack.addWidget(_cam_cont)
@@ -1960,15 +2068,16 @@ class MainWindow(QMainWindow):
         self._center_split.setStretchFactor(0, 3)
         self._center_split.setStretchFactor(1, 1)
         self._center_split.setCollapsible(0, False)
-        body.addWidget(self._center_split, stretch=5)
+        root.addWidget(self._center_split, stretch=1)
 
-        self._right_panel = self._build_right_panel()
-        body.addWidget(self._right_panel, stretch=0)
+        # Floating settings (gear) button — the ONLY chrome on screen
+        self._gear_btn = _GearButton(central)
+        self._gear_btn.move(16, 16)
+        self._gear_btn.clicked.connect(self._toggle_drawer)
+        self._gear_btn.show()
+        self._gear_btn.raise_()
 
-        root.addLayout(body, stretch=1)
-        root.addWidget(self._build_footer())
-
-        # Quick-access drawer (floating overlay, built after central widget layout is done)
+        # Sliding settings panel (Remote control, mic, monitor, log, input…)
         self._quick_drawer = self._build_quick_drawer()
         self._update_autostart_btn(self._check_autostart())
         from memory.config_manager import get_brief_enabled as _gbe
@@ -2031,8 +2140,8 @@ class MainWindow(QMainWindow):
         pw = _CameraPreview._W
         ph = self._cam_preview.height()
         self._cam_preview.setGeometry(
-            cw.width() - _RIGHT_W - pw - 12,
-            cw.height() - ph - 28,
+            cw.width() - pw - 16,
+            cw.height() - ph - 16,
             pw, ph,
         )
 
@@ -2593,6 +2702,14 @@ class MainWindow(QMainWindow):
         else:
             self.showFullScreen()
 
+    def showEvent(self, event):
+        super().showEvent(event)
+        if hasattr(self, "_gear_btn"):
+            self._gear_btn.move(16, 16)
+            self._gear_btn.raise_()
+        if hasattr(self, "_quick_drawer"):
+            self._position_quick_drawer()
+
     def resizeEvent(self, event):
         super().resizeEvent(event)
         cw = self.centralWidget()
@@ -2617,20 +2734,23 @@ class MainWindow(QMainWindow):
                 (cw.height() - oh) // 2,
                 ow, oh,
             )
-        # Camera preview — bottom-right corner of the center/HUD area
+        # Camera preview — bottom-right corner
         pw = _CameraPreview._W
         ph = self._cam_preview.height() or _CameraPreview._H
         self._cam_preview.setGeometry(
-            cw.width() - _RIGHT_W - pw - 12,
-            cw.height() - ph - 28,
+            cw.width() - pw - 16,
+            cw.height() - ph - 16,
             pw, ph,
         )
         # Clipboard panel — bottom-center
         if hasattr(self, '_clipboard_panel') and self._clipboard_panel.isVisible():
             self._position_clipboard_panel()
-        # Quick drawer — reposition if open
-        if hasattr(self, '_quick_drawer') and self._quick_drawer.isVisible():
+        # Settings drawer + floating gear button
+        if hasattr(self, '_quick_drawer'):
             self._position_quick_drawer()
+        if hasattr(self, '_gear_btn'):
+            self._gear_btn.move(16, 16)
+            self._gear_btn.raise_()
 
     def _update_metrics(self):
         snap = _metrics.snapshot()
@@ -2751,6 +2871,8 @@ class MainWindow(QMainWindow):
     def _tick_clock(self):
         self._clock_lbl.setText(time.strftime("%H:%M:%S"))
         self._date_lbl.setText(time.strftime("%a %d %b %Y"))
+        if hasattr(self, "_clock_lbl2"):
+            self._clock_lbl2.setText(time.strftime("%H:%M:%S"))
 
     def _build_left_panel(self) -> QWidget:
         w = QWidget()
@@ -2893,20 +3015,26 @@ class MainWindow(QMainWindow):
         return w
 
     def _build_quick_drawer(self) -> QWidget:
-        """Floating overlay panel shown when the ⚙ header button is toggled."""
+        """Sliding settings panel — the ONLY chrome besides the orb.
+
+        Contains every control that used to be spread across the header,
+        the side panels and the footer: remote control, mic, interrupt,
+        system monitor, activity log, file upload and the command input.
+        """
         _BTN_STYLE_PRI = f"""
             QPushButton {{
                 background: #00091a; color: {C.PRI};
-                border: 1px solid {C.PRI_DIM}; border-radius: 3px;
-                text-align: left; padding: 0 8px;
+                border: 1px solid {C.PRI_DIM}; border-radius: 4px;
+                text-align: left; padding: 0 10px;
             }}
             QPushButton:hover {{ background: {C.PRI_GHO}; border-color: {C.PRI}; }}
+            QPushButton:pressed {{ background: {C.PRI_GHO}; }}
         """
         _BTN_STYLE_DIM = f"""
             QPushButton {{
-                background: transparent; color: {C.TEXT_MED};
-                border: 1px solid {C.BORDER}; border-radius: 3px;
-                text-align: left; padding: 0 8px;
+                background: {C.PANEL2}; color: {C.TEXT_MED};
+                border: 1px solid {C.BORDER}; border-radius: 4px;
+                text-align: left; padding: 0 10px;
             }}
             QPushButton:hover {{ color: {C.PRI}; border-color: {C.BORDER_B}; }}
         """
@@ -2916,56 +3044,104 @@ class MainWindow(QMainWindow):
         w.setStyleSheet(f"""
             QWidget#QuickDrawer {{
                 background: {C.DARK};
-                border: 1px solid {C.BORDER_B};
-                border-top: none;
-                border-radius: 0 0 6px 6px;
+                border-left: 1px solid {C.BORDER_B};
             }}
         """)
+        w.setAutoFillBackground(True)
         w.hide()
 
-        lay = QVBoxLayout(w)
-        lay.setContentsMargins(10, 8, 10, 10)
-        lay.setSpacing(5)
+        outer = QVBoxLayout(w)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(0)
 
-        hdr = QLabel("◈ CONTROLS")
-        hdr.setFont(QFont("Courier New", 7, QFont.Weight.Bold))
-        hdr.setStyleSheet(f"color: {C.PRI_DIM}; background: transparent; "
-                          f"border-bottom: 1px solid {C.BORDER}; padding-bottom: 4px;")
-        lay.addWidget(hdr)
+        # ── panel header ──────────────────────────────────────────────────
+        top = QWidget()
+        top.setFixedHeight(42)
+        top.setStyleSheet(f"background: {C.PANEL}; border-bottom: 1px solid {C.BORDER};")
+        top_l = QHBoxLayout(top)
+        top_l.setContentsMargins(12, 0, 8, 0)
+        ttl = QLabel("\u25c8  SETTINGS & CONTROLS")
+        ttl.setFont(QFont("Courier New", 9, QFont.Weight.Bold))
+        ttl.setStyleSheet(f"color: {C.PRI}; background: transparent; letter-spacing: 1px;")
+        top_l.addWidget(ttl)
+        top_l.addStretch()
+        self._clock_lbl2 = QLabel("")
+        self._clock_lbl2.setFont(QFont("Courier New", 9, QFont.Weight.Bold))
+        self._clock_lbl2.setStyleSheet(f"color: {C.TEXT_DIM}; background: transparent;")
+        top_l.addWidget(self._clock_lbl2)
+        close_b = QPushButton("\u2715")
+        close_b.setFixedSize(24, 24)
+        close_b.setCursor(Qt.CursorShape.PointingHandCursor)
+        close_b.setStyleSheet(f"""
+            QPushButton {{ background: transparent; color: {C.TEXT_DIM};
+                           border: none; font-size: 13px; }}
+            QPushButton:hover {{ color: {C.MUTED_C}; }}
+        """)
+        close_b.clicked.connect(lambda: self._toggle_drawer(False))
+        top_l.addSpacing(6)
+        top_l.addWidget(close_b)
+        outer.addWidget(top)
 
-        remote_btn = QPushButton("◉  REMOTE CONTROL")
-        remote_btn.setFixedHeight(30)
+        # ── scrollable body ───────────────────────────────────────────────
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+        scroll.setStyleSheet(f"""
+            QScrollArea {{ background: {C.DARK}; border: none; }}
+            QScrollBar:vertical {{ background: {C.BG}; width: 7px; border: none; }}
+            QScrollBar::handle:vertical {{ background: {C.BORDER_B};
+                                           border-radius: 3px; min-height: 20px; }}
+            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{
+                height: 0; border: none; }}
+        """)
+        body = QWidget()
+        body.setStyleSheet(f"background: {C.DARK};")
+        lay = QVBoxLayout(body)
+        lay.setContentsMargins(10, 10, 10, 12)
+        lay.setSpacing(6)
+
+        def _sec(txt):
+            l = QLabel(f"\u25b8 {txt}")
+            l.setFont(QFont("Courier New", 7, QFont.Weight.Bold))
+            l.setStyleSheet(f"color: {C.PRI_DIM}; background: transparent; "
+                            f"border-bottom: 1px solid {C.BORDER}; padding-bottom: 3px;")
+            return l
+
+        lay.addWidget(_sec("CONTROLS"))
+
+        remote_btn = QPushButton("\u25c9  REMOTE CONTROL")
+        remote_btn.setFixedHeight(32)
         remote_btn.setFont(QFont("Courier New", 8, QFont.Weight.Bold))
         remote_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         remote_btn.setStyleSheet(_BTN_STYLE_PRI)
         remote_btn.clicked.connect(self._open_remote)
         lay.addWidget(remote_btn)
 
-        fs_btn = QPushButton("⛶  FULLSCREEN  [F11]")
-        fs_btn.setFixedHeight(26)
+        fs_btn = QPushButton("\u26f6  FULLSCREEN  [F11]")
+        fs_btn.setFixedHeight(28)
         fs_btn.setFont(QFont("Courier New", 7))
         fs_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         fs_btn.setStyleSheet(_BTN_STYLE_DIM)
         fs_btn.clicked.connect(self._toggle_fullscreen)
         lay.addWidget(fs_btn)
 
-        sc_btn = QPushButton("⊞  CREATE DESKTOP SHORTCUT")
-        sc_btn.setFixedHeight(26)
+        sc_btn = QPushButton("\u229e  CREATE DESKTOP SHORTCUT")
+        sc_btn.setFixedHeight(28)
         sc_btn.setFont(QFont("Courier New", 7))
         sc_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         sc_btn.setStyleSheet(_BTN_STYLE_DIM)
         sc_btn.clicked.connect(self._create_desktop_shortcut)
         lay.addWidget(sc_btn)
 
-        self._autostart_btn = QPushButton("◉  AUTO-START: OFF")
-        self._autostart_btn.setFixedHeight(26)
+        self._autostart_btn = QPushButton("\u25c9  AUTO-START: OFF")
+        self._autostart_btn.setFixedHeight(28)
         self._autostart_btn.setFont(QFont("Courier New", 7))
         self._autostart_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self._autostart_btn.clicked.connect(self._toggle_autostart)
         lay.addWidget(self._autostart_btn)
 
-        cust_btn = QPushButton("⚙  CUSTOMISE ASSISTANT")
-        cust_btn.setFixedHeight(26)
+        cust_btn = QPushButton("\u2699  CUSTOMISE ASSISTANT")
+        cust_btn.setFixedHeight(28)
         cust_btn.setFont(QFont("Courier New", 7))
         cust_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         cust_btn.setStyleSheet(_BTN_STYLE_DIM)
@@ -2973,30 +3149,89 @@ class MainWindow(QMainWindow):
         lay.addWidget(cust_btn)
 
         self._brief_btn = QPushButton()
-        self._brief_btn.setFixedHeight(26)
+        self._brief_btn.setFixedHeight(28)
         self._brief_btn.setFont(QFont("Courier New", 7))
         self._brief_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self._brief_btn.clicked.connect(self._toggle_brief)
         lay.addWidget(self._brief_btn)
 
-        w.adjustSize()
+        # ── system monitor (was the left panel) ───────────────────────────
+        lay.addSpacing(4)
+        self._left_panel.setMinimumWidth(0)
+        self._left_panel.setMaximumWidth(16777215)
+        self._left_panel.setStyleSheet(f"background: {C.DARK}; border: none;")
+        lay.addWidget(self._left_panel)
+
+        # ── log / upload / input / mic (was the right panel) ──────────────
+        self._right_panel.setMinimumWidth(0)
+        self._right_panel.setMaximumWidth(16777215)
+        self._right_panel.setStyleSheet(f"background: {C.DARK}; border: none;")
+        self._right_panel.setMinimumHeight(420)
+        lay.addWidget(self._right_panel, stretch=1)
+
+        hint = QLabel("[F4] Mute  \u00b7  [F11] Fullscreen  \u00b7  [ESC] Interrupt")
+        hint.setFont(QFont("Courier New", 7))
+        hint.setStyleSheet(f"color: {C.TEXT_DIM}; background: transparent;")
+        hint.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        lay.addWidget(hint)
+
+        scroll.setWidget(body)
+        outer.addWidget(scroll, stretch=1)
+
+        self._drawer_open = False
+        self._drawer_anim = None
         return w
 
-    def _toggle_drawer(self, checked: bool):
-        if checked:
-            self._position_quick_drawer()
+    _DRAWER_W = 360
+
+    def _toggle_drawer(self, checked: bool | None = None):
+        """Slide the settings panel in/out with an animation."""
+        from PyQt6.QtCore import QPropertyAnimation, QRect
+        want_open = (not self._drawer_open) if checked is None else bool(checked)
+        if want_open == self._drawer_open and self._quick_drawer.isVisible():
+            return
+        cw = self.centralWidget()
+        dw = min(self._DRAWER_W, max(260, cw.width() - 60))
+        h  = cw.height()
+        shown  = QRect(cw.width() - dw, 0, dw, h)
+        hidden = QRect(cw.width(),      0, dw, h)
+
+        if self._drawer_anim is not None:
+            self._drawer_anim.stop()
+
+        if want_open:
+            self._quick_drawer.setGeometry(hidden)
             self._quick_drawer.show()
             self._quick_drawer.raise_()
+            start, end = hidden, shown
         else:
-            self._quick_drawer.hide()
+            start, end = self._quick_drawer.geometry(), hidden
+
+        anim = QPropertyAnimation(self._quick_drawer, b"geometry", self)
+        anim.setDuration(280)
+        anim.setStartValue(start)
+        anim.setEndValue(end)
+        anim.setEasingCurve(QEasingCurve.Type.OutCubic
+                            if want_open else QEasingCurve.Type.InCubic)
+        if not want_open:
+            anim.finished.connect(self._quick_drawer.hide)
+        anim.start()
+        self._drawer_anim = anim
+        self._drawer_open = want_open
+        if hasattr(self, "_gear_btn"):
+            self._gear_btn.set_active(want_open)
+            self._gear_btn.raise_()
 
     def _position_quick_drawer(self):
-        if not hasattr(self, '_quick_drawer'):
+        if not hasattr(self, "_quick_drawer"):
             return
-        _W = 220
-        self._quick_drawer.setFixedWidth(_W)
-        self._quick_drawer.adjustSize()
-        self._quick_drawer.setGeometry(12, 54, _W, self._quick_drawer.sizeHint().height())
+        cw = self.centralWidget()
+        dw = min(self._DRAWER_W, max(260, cw.width() - 60))
+        if self._drawer_open:
+            self._quick_drawer.setGeometry(cw.width() - dw, 0, dw, cw.height())
+            self._quick_drawer.raise_()
+        else:
+            self._quick_drawer.setGeometry(cw.width(), 0, dw, cw.height())
 
     def _build_input_row(self) -> QHBoxLayout:
         row = QHBoxLayout(); row.setSpacing(5)
@@ -3293,7 +3528,8 @@ class MainWindow(QMainWindow):
             self._autostart_btn.setStyleSheet(f"""
                 QPushButton {{
                     background: #001a08; color: {C.GREEN};
-                    border: 1px solid {C.GREEN_D}; border-radius: 3px;
+                    border: 1px solid {C.GREEN_D}; border-radius: 4px;
+                    text-align: left; padding: 0 10px;
                 }}
                 QPushButton:hover {{ background: #002010; }}
             """)
@@ -3301,8 +3537,9 @@ class MainWindow(QMainWindow):
             self._autostart_btn.setText("◉  AUTO-START: OFF")
             self._autostart_btn.setStyleSheet(f"""
                 QPushButton {{
-                    background: transparent; color: {C.TEXT_DIM};
-                    border: 1px solid {C.BORDER}; border-radius: 3px;
+                    background: {C.PANEL2}; color: {C.TEXT_DIM};
+                    border: 1px solid {C.BORDER}; border-radius: 4px;
+                    text-align: left; padding: 0 10px;
                 }}
                 QPushButton:hover {{ color: {C.TEXT}; border: 1px solid {C.BORDER_B}; }}
             """)
