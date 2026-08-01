@@ -51,9 +51,12 @@ _HUD_JOINTS = (
 
 _MODEL_URLS = (
     "https://storage.googleapis.com/mediapipe-models/pose_landmarker/"
-    "pose_landmarker_lite/float16/1/pose_landmarker_lite.task",
-    "https://storage.googleapis.com/mediapipe-models/pose_landmarker/"
     "pose_landmarker_lite/float16/latest/pose_landmarker_lite.task",
+    "https://storage.googleapis.com/mediapipe-models/pose_landmarker/"
+    "pose_landmarker_lite/float16/1/pose_landmarker_lite.task",
+    "https://storage.googleapis.com/mediapipe-assets/pose_landmarker_lite.task",
+    "https://huggingface.co/spaces/MediaPipe/pose-landmarker/resolve/main/"
+    "pose_landmarker_lite.task",
 )
 
 
@@ -64,7 +67,11 @@ def _model_path() -> Path:
 
 
 def _ensure_model() -> Path | None:
-    """Return the local model file, downloading it once if needed."""
+    """Return the local model file, downloading it once if needed.
+
+    You can also drop `pose_landmarker_lite.task` into the config/ folder
+    manually (e.g. on an offline machine) and it will be picked up here.
+    """
     p = _model_path()
     if p.exists() and p.stat().st_size > 1000:
         return p
@@ -82,12 +89,16 @@ def _ensure_model() -> Path | None:
                 print(f"[PoseTracker] Model ready → {p.name}")
                 return p
         except Exception as e:
-            print(f"[PoseTracker] Model download failed: {e}")
+            print(f"[PoseTracker] Model source unavailable ({e})")
         finally:
             try:
                 tmp.unlink(missing_ok=True)
             except Exception:
                 pass
+    print("[PoseTracker] Could not fetch the pose model. Skeleton tracking is "
+          "disabled until it is available.")
+    print(f"[PoseTracker] Offline fix: download pose_landmarker_lite.task and "
+          f"place it in {p.parent}")
     return None
 
 
@@ -419,25 +430,41 @@ class PoseTracker:
 
     # ── OpenCV HOG fallback ─────────────────────────────────────────────
     def _track_hog(self, bgr) -> list:
+        """Coarse full-body detector.
+
+        HOG is trained on upright, full-height pedestrians. On close-up or
+        portrait framing it happily reports small bogus boxes, so we filter
+        hard on confidence, size and aspect ratio. Crucially, results are
+        marked `no_skeleton` — a HOG box carries no joint information, and
+        inventing a rig inside it (as a generic fallback would) draws a
+        skeleton that has nothing to do with the actual person.
+        """
         cv2 = self._cv2
         h, w = bgr.shape[:2]
-        small = cv2.resize(bgr, (min(w, 480), int(h * min(w, 480) / w)))
+        scale_w = min(w, 480)
+        small = cv2.resize(bgr, (scale_w, max(1, int(h * scale_w / w))))
         sh, sw = small.shape[:2]
         rects, weights = self._hog.detectMultiScale(
             small, winStride=(8, 8), padding=(8, 8), scale=1.06
         )
         out = []
         for (x, y, bw, bh), score in zip(rects, weights):
-            if float(score) < 0.4:
+            if float(score) < 0.85:              # was 0.4 → far too permissive
+                continue
+            if bh < sh * 0.35:                   # ignore tiny spurious blobs
+                continue
+            ratio = bh / float(bw or 1)
+            if not (1.4 <= ratio <= 4.5):        # people are tall, not square
                 continue
             out.append({
                 "kind":   "person",
-                "label":  "PERSON — TRACKED",
-                "detail": "live local tracking",
+                "label":  "PERSON",
+                "detail": "detected",
                 "box": [round(y / sh * 1000, 1), round(x / sw * 1000, 1),
                         round((y + bh) / sh * 1000, 1),
                         round((x + bw) / sw * 1000, 1)],
                 "source": "local",
+                "no_skeleton": True,
             })
             if len(out) >= self._max_people:
                 break

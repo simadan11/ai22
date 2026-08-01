@@ -1134,7 +1134,11 @@
           if (p) joints[k] = p;
         }
       }
-      const rig = Object.keys(joints).length >= 3 ? joints : _fallbackRig(x, y, w, h);
+      // A box-only detector (HOG) has no joints; a generic rig would draw a
+      // skeleton unrelated to the real body, so skip bones entirely.
+      const rig = Object.keys(joints).length >= 3
+        ? joints
+        : (d.no_skeleton ? {} : _fallbackRig(x, y, w, h));
       _BONES.forEach(([a, b]) => {
         if (!rig[a] || !rig[b]) return;
         svg.appendChild(mk('line', {

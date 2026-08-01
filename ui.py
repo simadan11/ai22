@@ -2312,10 +2312,16 @@ class MainWindow(QMainWindow):
                     except (TypeError, ValueError):
                         pass
         if len(joints) < 3:
-            joints = self._fallback_skeleton(x, y, bw, bh)
+            # A detector that only knows the bounding box (e.g. HOG) carries no
+            # joint data. Drawing a generic rig there paints a skeleton that
+            # does not match the real body, so we show only the outline.
+            if d.get("no_skeleton"):
+                joints = {}
+            else:
+                joints = self._fallback_skeleton(x, y, bw, bh)
 
         # bone glow pass, then crisp bone pass
-        for w, a in ((5, 70), (2, 255)):
+        for w, a in (((5, 70), (2, 255)) if joints else ()):
             col = QColor(self._SKEL_COL)
             col.setAlpha(int(a * (0.7 + 0.3 * pulse)) if a < 255 else 255)
             pen = QPen(col, w)
