@@ -2388,6 +2388,52 @@ class MainWindow(QMainWindow):
         p.setPen(QPen(QBrush(gl), 2))
         p.drawLine(QPointF(x, sy), QPointF(x + bw, sy))
 
+    _FACE_KNOWN   = QColor("#00ffa8")     # recognised → green lock
+    _FACE_UNKNOWN = QColor("#00d4ff")     # detected but not enrolled → cyan
+
+    def _draw_face_fx(self, p: QPainter, d: dict,
+                      x: int, y: int, bw: int, bh: int) -> None:
+        """Targeting reticle around a detected face."""
+        known = bool(d.get("known"))
+        col   = self._FACE_KNOWN if known else self._FACE_UNKNOWN
+        pulse = 0.5 + 0.5 * math.sin(self._person_phase() * 2 * math.pi)
+
+        p.setBrush(Qt.BrushStyle.NoBrush)
+        # soft halo
+        p.setRenderHint(QPainter.RenderHint.Antialiasing, False)
+        halo = QColor(col); halo.setAlpha(int(40 + 30 * pulse))
+        p.setPen(QPen(halo, 6))
+        p.drawRect(x, y, bw, bh)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+
+        # crisp frame
+        main = QColor(col); main.setAlpha(230)
+        p.setPen(QPen(main, 1.6))
+        p.drawRect(x, y, bw, bh)
+
+        # corner ticks
+        cl = max(6, int(min(bw, bh) * 0.26))
+        p.setPen(QPen(main, 2.4))
+        for bx, by, dx, dy in ((x, y, 1, 1), (x + bw, y, -1, 1),
+                               (x, y + bh, 1, -1), (x + bw, y + bh, -1, -1)):
+            p.drawLine(QPointF(bx, by), QPointF(bx + dx * cl, by))
+            p.drawLine(QPointF(bx, by), QPointF(bx, by + dy * cl))
+
+        # cross-hair on the face centre
+        cx, cy = x + bw / 2, y + bh / 2
+        tick = max(4, int(min(bw, bh) * 0.10))
+        faint = QColor(col); faint.setAlpha(150)
+        p.setPen(QPen(faint, 1))
+        p.drawLine(QPointF(cx - tick, cy), QPointF(cx + tick, cy))
+        p.drawLine(QPointF(cx, cy - tick), QPointF(cx, cy + tick))
+
+        # a recognised identity gets a pulsing lock ring
+        if known:
+            r = max(bw, bh) * (0.62 + 0.05 * pulse)
+            ring = QColor(col); ring.setAlpha(int(90 + 80 * pulse))
+            p.setPen(QPen(ring, 1.6))
+            p.drawEllipse(QPointF(cx, cy), r, r)
+
     @staticmethod
     def _fallback_skeleton(x: int, y: int, bw: int, bh: int) -> dict:
         """Anatomically-plausible rig derived from the bounding box alone,
@@ -2414,6 +2460,7 @@ class MainWindow(QMainWindow):
                 "person":  QColor("#f97316"),
                 "vehicle": QColor("#facc15"),
                 "object":  QColor("#00d4ff"),
+                "face":    QColor("#00ffa8"),
             }
         sw, sh = px2.width(), px2.height()
         if sw <= 0 or sh <= 0:
@@ -2445,7 +2492,14 @@ class MainWindow(QMainWindow):
                 bw = int((xmax - xmin) / 1000 * sw)
                 bh = int((ymax - ymin) / 1000 * sh)
 
-                if kind == "person":
+                if kind == "face":
+                    try:
+                        self._draw_face_fx(p, d, x, y, bw, bh)
+                    except Exception:
+                        p.setPen(QPen(col, 2))
+                        p.setBrush(Qt.BrushStyle.NoBrush)
+                        p.drawRect(x, y, bw, bh)
+                elif kind == "person":
                     # full EDITH treatment: aura outline + bones + brackets
                     try:
                         self._draw_person_fx(p, d, sw, sh, x, y, bw, bh)
@@ -2567,7 +2621,7 @@ class MainWindow(QMainWindow):
     # --- EDITH person-effect animation --------------------------------------
     def _has_person(self) -> bool:
         dets = (self._scan_dets if self._feed_mode == "scan" else self._pcam_dets)
-        return any(isinstance(d, dict) and d.get("kind") == "person"
+        return any(isinstance(d, dict) and d.get("kind") in ("person", "face")
                    for d in (dets or []))
 
     def _sync_fx_timer(self) -> None:

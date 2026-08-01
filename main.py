@@ -223,6 +223,23 @@ TOOL_DECLARATIONS = [
         }
     },
     {
+        "name": "remember_face",
+        "description": (
+            "Learns the face currently visible on the live phone camera and "
+            "links it to a name, so the HUD labels that person from then on. "
+            "Call when the user says: remember this face, remember me, this is "
+            "<name>, save my face, запомни это лицо, запомни меня, это <имя>."
+        ),
+        "parameters": {
+            "type": "OBJECT",
+            "properties": {
+                "name": {"type": "STRING",
+                         "description": "Name to attach to the visible face"}
+            },
+            "required": ["name"]
+        }
+    },
+    {
         "name": "close_camera",
         "description": (
             "Closes the live camera view shown on screen. "
@@ -562,6 +579,7 @@ class JarvisLive:
         self._is_speaking         = False
         self._speaking_lock       = threading.Lock()
         self._phone_active        = False   # True while phone mic is streaming; pauses PC mic
+        self._last_frame: bytes | None = None   # newest live camera frame
         self._pending_vision       = None    # (img_bytes, mime_type, question, angle) to inject after tool response
         self._vision_cam_active    = False   # True if camera was opened for vision → auto-close after response
         self._vision_close_pending = False   # True after vision injected; next turn_complete closes camera
@@ -786,6 +804,27 @@ class JarvisLive:
                         f"telling them you are looking at their {_stall} right now. "
                         f"Do NOT describe or guess content — the actual image arrives in the NEXT message."
                     )
+
+            elif name == "remember_face":
+                who = (args.get("name") or args.get("person") or "").strip()
+                frame = self._last_frame
+                if not who:
+                    result = "Tell me the person's name so I can label the face."
+                elif not frame:
+                    result = ("No live camera frame available. Start the phone "
+                              "camera first, then ask me again.")
+                else:
+                    from actions.face_id import enroll as _enroll
+                    ok = await loop.run_in_executor(
+                        None, lambda: _enroll(frame, who)
+                    )
+                    if ok:
+                        self.ui.write_log(f"SYS: Face enrolled — {who}")
+                        result = (f"Saved. I will recognise {who} from now on. "
+                                  f"Show the face from a few angles to improve it.")
+                    else:
+                        result = ("I could not find a clear face in the frame. "
+                                  "Move closer to the camera and try again.")
 
             elif name == "close_camera":
                 self.ui.stop_camera_stream()
@@ -1503,6 +1542,7 @@ class JarvisLive:
                     self.ui.write_log("SYS: Phone camera live on PC HUD.")
                 except Exception:
                     pass
+            self._last_frame = frame          # newest frame, for face enrolment
             try:
                 self.ui.show_phone_cam_frame(frame)
             except Exception:
@@ -1540,6 +1580,18 @@ class JarvisLive:
         except BaseException as e:
             print(f"[Dashboard] Local tracking failed: {e}")
             return
+
+        # Face detection + identity, also fully local and per-frame.
+        faces = []
+        try:
+            from actions.face_id import detect_faces
+            faces = await asyncio.wait_for(
+                asyncio.to_thread(detect_faces, frame), timeout=5.0
+            )
+        except asyncio.TimeoutError:
+            pass
+        except BaseException as e:
+            print(f"[Dashboard] Face detection failed: {e}")
         if not self._dashboard._cam_stream_active:
             return
         # Reuse the newest Gemini label for a person, if we have one, so the
@@ -1553,7 +1605,20 @@ class JarvisLive:
         # Non-person Gemini findings (objects/vehicles) stay on screen too.
         extras = [d for d in (getattr(self, "_live_labels", None) or [])
                   if d.get("kind") != "person"]
-        dets = people + extras
+        # A recognised face is the strongest identity signal we have — promote
+        # the name onto the person box that contains it.
+        for f in faces:
+            if not f.get("known"):
+                continue
+            fy0, fx0, fy1, fx1 = f["box"]
+            fcy, fcx = (fy0 + fy1) / 2, (fx0 + fx1) / 2
+            for p in people:
+                py0, px0, py1, px1 = p["box"]
+                if py0 <= fcy <= py1 and px0 <= fcx <= px1:
+                    p["label"] = f["label"].replace("FACE — ", "PERSON — ")
+                    p["detail"] = f["detail"]
+                    break
+        dets = people + faces + extras
         try:
             self.ui.show_phone_cam_dets(dets)
         except Exception:

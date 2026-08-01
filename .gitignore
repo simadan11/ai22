@@ -1,0 +1,6 @@
+
+# Locally enrolled faces and downloaded vision models (private / large)
+config/faces/
+config/*.onnx
+config/*.task
+config/face_lbph.yml

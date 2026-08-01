@@ -198,6 +198,11 @@
     .tag-info:active { transform: scale(0.98); }
     @keyframes tag-pop { from { opacity: 0; transform: scale(1.15); } }
     .tag-p { border-color: #f97316; box-shadow: 0 0 12px rgba(249,115,22,0.35); }
+    .tag-f { border-color: #00d4ff; box-shadow: 0 0 14px rgba(0,212,255,0.45); }
+    .tag-f .tag-l { background: #00d4ff; }
+    .tag-fk { border-color: #00ffa8; box-shadow: 0 0 16px rgba(0,255,168,0.55); }
+    .tag-fk .tag-l { background: #00ffa8; }
+    .tag-fk .tag-d { color: #7dffd0; }
     .tag-v { border-color: #facc15; box-shadow: 0 0 12px rgba(250,204,21,0.35); }
     .tag-v .tag-l { background: #facc15; }
     .tag-v .tag-d { color: #fde68a; }
@@ -1181,7 +1186,7 @@
       const dw = vw * scale, dh = vh * scale;
       const offX = (dw - cw) / 2, offY = (dh - ch) / 2;
       const mirror = (_facing === 'user');
-      let persons = 0, vehicles = 0, drawn = 0;
+      let persons = 0, vehicles = 0, faces = 0, drawn = 0;
       _lastDets.slice(0, 12).forEach(d => {
         if (!Array.isArray(d.box) || d.box.length !== 4) return;
         let [ymin, xmin, ymax, xmax] = d.box.map(Number);
@@ -1192,11 +1197,15 @@
         if (mirror) { const t = xmin; xmin = 1000 - xmax; xmax = 1000 - t; }
         const el = document.createElement('div');
         el.className = 'tag' +
-          (d.kind === 'person' ? ' tag-p' : d.kind === 'vehicle' ? ' tag-v' : '');
+          (d.kind === 'person' ? ' tag-p'
+           : d.kind === 'vehicle' ? ' tag-v'
+           : d.kind === 'face' ? (d.known ? ' tag-f tag-fk' : ' tag-f')
+           : '');
         // objects, vehicles, landmarks: tap → JARVIS looks it up & explains.
         // people and plates are intentionally NOT searchable.
         const _label = String(d.label || '');
-        if (d.kind !== 'person' && !/^PLATE\b/i.test(_label)) {
+        if (d.kind !== 'person' && d.kind !== 'face'
+            && !/^PLATE\b/i.test(_label)) {
           el.classList.add('tag-info');
           el.addEventListener('click', () => _tagInfo(_label));
         }
@@ -1224,9 +1233,10 @@
         drawn++;
         if (d.kind === 'person') persons++;
         else if (d.kind === 'vehicle') vehicles++;
+        else if (d.kind === 'face') faces++;
       });
       camTargets.textContent = drawn
-        ? `TARGETS: ${drawn} ▸ ${persons} PERSON · ${vehicles} VEHICLE · ${drawn - persons - vehicles} OBJECT`
+        ? `TARGETS: ${drawn} ▸ ${persons} PERSON · ${faces} FACE · ${vehicles} VEHICLE · ${drawn - persons - vehicles - faces} OBJECT`
         : 'NO TARGETS';
       if (drawn) camStatus.textContent = 'ANALYSIS COMPLETE — ANSWER INCOMING';
     }
