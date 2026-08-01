@@ -553,7 +553,7 @@ TOOL_DECLARATIONS = [
         "description": (
             "Public OSINT lookup for IP addresses, domains, and open-source queries. "
             "Use for: checking IP geo/ISP info, domain RDAP details, or general public-data search. "
-            "Only queries publicly available data — no private access. Modes: ip | domain | search."
+            "Only queries publicly available data — no private access. Modes: ip | domain | search | phone | email | person | name."
         ),
         "parameters": {
             "type": "OBJECT",

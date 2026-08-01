@@ -136,4 +136,35 @@ def osint_lookup(
                 pass
             return f"[OSINT] Search mode failed for '{target}': {e}. Try mode='ip' or 'domain'."
 
-    return f"[OSINT] Unknown mode '{mode}'. Use: ip | domain | search."
+    def _osint_search_fallback(q, t, label, resp, pl, sm):
+        try:
+            import actions.web_search as ws
+            result = ws.web_search({"query": q, "mode": "search"}, response=resp, player=pl, session_memory=sm)
+            return f"OSINT — {label}: {t}\n" + result
+        except Exception:
+            try:
+                from duckduckgo_search import DDGS
+                results = []
+                with DDGS() as ddgs:
+                    for r in ddgs.text(q, max_results=5):
+                        results.append(f"• {r.get('title','')} — {r.get('href','')}")
+                if results:
+                    return f"OSINT — {label}: {t}\n" + "\n".join(results[:5])
+            except Exception:
+                pass
+            return f"[OSINT] {label} search failed for '{t}'. Try a different query."
+
+    # ── Phone / Email / Person (public web search only) ────────────────────────
+    if mode == "phone":
+        query = f"phone number info {target} country operator"
+        return _osint_search_fallback(query, target, "Phone", response, player, session_memory)
+
+    if mode == "email":
+        query = f"email {target} public info breach check"
+        return _osint_search_fallback(query, target, "Email", response, player, session_memory)
+
+    if mode in ("person", "name", "person_search"):
+        query = f"{target} public info biography"
+        return _osint_search_fallback(query, target, "Person", response, player, session_memory)
+
+    return f"[OSINT] Unknown mode '{mode}'. Use: ip | domain | search | phone | email | person | name."
