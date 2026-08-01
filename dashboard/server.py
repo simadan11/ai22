@@ -759,7 +759,15 @@ class DashboardServer:
                 detections = await asyncio.to_thread(_edith_detect, frame)
             except Exception as e:
                 print(f"[Dashboard] HUD detection failed: {e}")
-                return JSONResponse({"ok": False, "error": str(e)[:200]}, status_code=502)
+                msg = str(e)
+                if any(k in msg for k in (
+                    "UNAUTHENTICATED", "API_KEY_INVALID", "API key not valid",
+                    "invalid authentication credentials", "ACCESS_TOKEN_TYPE_UNSUPPORTED",
+                )):
+                    msg = "GEMINI API KEY INVALID — update config/api_keys.json"
+                else:
+                    msg = msg[:200]
+                return JSONResponse({"ok": False, "error": msg}, status_code=502)
             return JSONResponse({"ok": True, "detections": detections})
 
         # ── Phone mic real-time audio → Gemini Live ──────────────────────────

@@ -1553,7 +1553,13 @@ class JarvisLive:
                 traceback.print_exc()
 
                 # Invalid API key — stop hammering the API, prompt re-configuration
-                if "API key not valid" in err_str or "1007" in err_str:
+                _auth_err = any(k in err_str for k in (
+                    "API key not valid", "API_KEY_INVALID",
+                    "invalid authentication credentials",
+                    "ACCESS_TOKEN_TYPE_UNSUPPORTED",
+                    "UNAUTHENTICATED", "1007", "1008",
+                ))
+                if _auth_err:
                     self.ui.write_log("ERR: API key invalid — please re-enter your key.")
                     self.ui.set_state("SLEEPING")
                     self.ui.prompt_reconfig()
