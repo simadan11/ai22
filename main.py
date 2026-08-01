@@ -774,8 +774,28 @@ class JarvisLive:
             parts.append(mem_str)
         parts.append(sys_prompt)
 
+        # Relax Gemini's content filters to the least restrictive setting the
+        # API allows, so the assistant stops refusing ordinary requests.
+        # Google still enforces its own server-side limits on a few categories
+        # regardless of what we send — that part is not controllable client-side.
+        _safety = []
+        try:
+            for _cat in ("HARM_CATEGORY_HARASSMENT",
+                         "HARM_CATEGORY_HATE_SPEECH",
+                         "HARM_CATEGORY_SEXUALLY_EXPLICIT",
+                         "HARM_CATEGORY_DANGEROUS_CONTENT",
+                         "HARM_CATEGORY_CIVIC_INTEGRITY"):
+                _safety.append(types.SafetySetting(
+                    category=_cat,
+                    threshold=types.HarmBlockThreshold.BLOCK_NONE,
+                ))
+        except Exception as _e:
+            print(f"[JARVIS] Safety override unavailable: {_e}")
+            _safety = []
+
         return types.LiveConnectConfig(
             response_modalities=["AUDIO"],
+            safety_settings=_safety or None,
             output_audio_transcription={},
             input_audio_transcription={},
             system_instruction="\n".join(parts),

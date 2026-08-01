@@ -20,13 +20,14 @@ import time
 from pathlib import Path
 
 _DEPS_OK = False
+_DEPS_ERR = ""
 try:
     from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Request
     from fastapi.responses import HTMLResponse, JSONResponse, FileResponse
     import uvicorn
     _DEPS_OK = True
-except ImportError:
-    pass
+except ImportError as _e:
+    _DEPS_ERR = str(_e)
 
 # python-multipart is required for file uploads — optional dependency
 _UPLOAD_OK = False
@@ -401,8 +402,10 @@ _HUD_PROMPT = (
     "ONLY if the characters are actually readable in the image; "
     "famous landmark, product or logo → its real well-known name; "
     "anything else → short common name like 'LAPTOP', 'CAR KEYS'. "
-    "For people describe ONLY visible appearance/clothing/pose — never guess names "
-    "or identities. Prefer precise small boxes over big loose ones. "
+    "For people describe visible appearance/clothing/pose. Do not invent a "
+    "specific real-world identity for a stranger — the local face database "
+    "handles naming people the user has enrolled. "
+    "Prefer precise small boxes over big loose ones. "
     "EXTRA FOR EVERY PERSON (kind == \"person\") add two more fields: "
     '"outline": an array of 10-24 [y, x] points (integers 0-1000) tracing the '
     "silhouette of that person (head, shoulders, arms, torso, legs) as a closed "
@@ -568,6 +571,15 @@ class DashboardServer:
         self._uploads_dir                 = UPLOADS_DIR
         self._login_html                  = _read("login.html")
         self._app_html                    = _read("app.html")
+        # Without fastapi/uvicorn there is no app to build. Fail with a clear
+        # message here instead of a confusing NameError deep inside _build_app.
+        if not _DEPS_OK:
+            self.app = None
+            print("[Dashboard] Web dashboard disabled — missing dependency: "
+                  f"{_DEPS_ERR or 'fastapi/uvicorn'}")
+            print("[Dashboard] Fix:  pip install fastapi \"uvicorn[standard]\" "
+                  "cryptography python-multipart")
+            return
         self.app                          = self._build_app()
 
     # ── one-time key management ───────────────────────────────────────────
@@ -731,8 +743,24 @@ class DashboardServer:
 
         @app.post("/login")
         async def login(req: Request):
-            body    = await req.json()
-            entered = str(body.get("pin", "")).strip().upper()
+            # Accept JSON *and* classic form posts, and never 500 on a body
+            # that is not valid JSON (that turned the login page into an
+            # "Internal Server Error" for anyone not using our own fetch()).
+            entered = ""
+            try:
+                body = await req.json()
+                if isinstance(body, dict):
+                    entered = str(body.get("pin") or body.get("key") or "")
+            except Exception:
+                try:
+                    form = await req.form()
+                    entered = str(form.get("pin") or form.get("key") or "")
+                except Exception:
+                    entered = ""
+            entered = entered.strip().upper()
+            if not entered:
+                return JSONResponse({"ok": False, "error": "No key provided"},
+                                    status_code=400)
             now     = time.time()
             if entered in self._pending_keys and self._pending_keys[entered] > now:
                 del self._pending_keys[entered]          # one-time use
@@ -1164,9 +1192,11 @@ class DashboardServer:
         await uvicorn.Server(cfg).serve()
 
     async def serve(self) -> None:
-        if not _DEPS_OK:
-            print("[Dashboard] fastapi/uvicorn not installed — dashboard disabled.")
-            print("[Dashboard] Run:  pip install fastapi 'uvicorn[standard]' cryptography")
+        if not _DEPS_OK or self.app is None:
+            print("[Dashboard] Web dashboard disabled — missing dependency: "
+                  f"{_DEPS_ERR or 'fastapi/uvicorn'}")
+            print("[Dashboard] Run:  pip install fastapi \"uvicorn[standard]\" "
+                  "cryptography python-multipart")
             return
 
         # Firewall setup runs in a thread — uvicorn starts immediately,
