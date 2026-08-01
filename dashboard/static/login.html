@@ -124,6 +124,29 @@
       font-family: 'Courier New', monospace;
       font-size: 9px;
     }
+    .mobile-link {
+      margin-top: 20px;
+      padding: 14px;
+      background: rgba(255,255,255,0.05);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      text-decoration: none;
+      display: block;
+      transition: background 0.15s;
+    }
+    .mobile-link:hover {
+      background: rgba(255,255,255,0.08);
+    }
+    .mobile-link-text {
+      font-size: 13px;
+      color: var(--text);
+      font-weight: 600;
+      margin-bottom: 4px;
+    }
+    .mobile-link-sub {
+      font-size: 11px;
+      color: var(--muted);
+    }
     #reconnecting {
       display: none;
       color: var(--muted);
@@ -145,6 +168,10 @@
     </div>
     <div class="err" id="err"></div>
     <button class="btn" onclick="doLogin()">CONNECT</button>
+    <a href="/mobile" class="mobile-link">
+      <div class="mobile-link-text">📱 Мобильная версия с FaceID</div>
+      <div class="mobile-link-sub">Вход по распознаванию лица владельца</div>
+    </a>
     <p class="voice-note">
       🎤 <strong style="color:var(--text)">Voice commands:</strong> open
       <code>chrome://flags</code> on your phone, search

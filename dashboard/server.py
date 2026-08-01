@@ -568,6 +568,7 @@ class DashboardServer:
         self._uploads_dir                 = UPLOADS_DIR
         self._login_html                  = _read("login.html")
         self._app_html                    = _read("app.html")
+        self._mobile_html                 = _read("mobile.html")
         self.app                          = self._build_app()
 
     # ── one-time key management ───────────────────────────────────────────
@@ -719,6 +720,57 @@ class DashboardServer:
         async def login_page():
             return HTMLResponse(self._login_html)
 
+        @app.get("/mobile", response_class=HTMLResponse)
+        async def mobile_page():
+            """Мобильная веб-версия с аутентификацией по лицу владельца."""
+            return HTMLResponse(self._mobile_html)
+
+        @app.get("/api/face-auth/status")
+        async def face_auth_status():
+            """Проверка статуса FaceID: есть ли зарегистрированные лица."""
+            try:
+                import sys
+                sys.path.insert(0, str(BASE_DIR))
+                from actions.face_id import get_engine
+                
+                engine = get_engine()
+                known = engine.known_names
+                
+                # Load config
+                user_name = ""
+                assistant_name = "EDIT"
+                try:
+                    import json as _json
+                    config_path = BASE_DIR / "config" / "api_keys.json"
+                    if config_path.exists():
+                        with open(config_path, "r", encoding="utf-8") as f:
+                            cfg = _json.load(f)
+                            user_name = cfg.get("user_name") or ""
+                            assistant_name = cfg.get("assistant_name") or "EDIT"
+                except Exception:
+                    pass
+                
+                return JSONResponse({
+                    "ok": True,
+                    "has_faces": len(known) > 0,
+                    "enrolled_count": len(known),
+                    "enrolled_names": known,
+                    "detector": engine.detector,
+                    "user_name": user_name,
+                    "assistant_name": assistant_name
+                })
+                
+            except ImportError:
+                return JSONResponse({
+                    "ok": False,
+                    "error": "FaceID модуль недоступен"
+                })
+            except Exception as e:
+                return JSONResponse({
+                    "ok": False,
+                    "error": str(e)
+                })
+
         @app.get("/", response_class=HTMLResponse)
         async def index():
             # Auth is handled client-side via sessionStorage bearer token.
@@ -818,6 +870,176 @@ class DashboardServer:
                 {"type": "sys", "text": "Known device reconnected automatically."}
             ))
             return JSONResponse({"ok": True, "token": tok, "key": session_key})
+
+        @app.post("/api/face-enroll")
+        async def face_enroll_ep(req: Request):
+            """Регистрация лица владельца для FaceID аутентификации.
+            
+            Принимает {frame: base64_jpeg, name: str}.
+            Сохраняет лицо в config/faces/<name>/.
+            """
+            try:
+                body = await req.json()
+            except Exception:
+                return JSONResponse({"ok": False, "error": "Invalid request"}, status_code=400)
+            
+            b64_frame = str(body.get("frame") or "").strip()
+            name = str(body.get("name") or "").strip()
+            
+            if not b64_frame:
+                return JSONResponse({"ok": False, "error": "No frame provided"}, status_code=400)
+            if not name:
+                return JSONResponse({"ok": False, "error": "Name is required"}, status_code=400)
+            
+            # Decode base64 JPEG
+            try:
+                if b64_frame.startswith("data:"):
+                    b64_frame = b64_frame.split(",", 1)[1]
+                frame_bytes = base64.b64decode(b64_frame)
+            except Exception:
+                return JSONResponse({"ok": False, "error": "Invalid frame data"}, status_code=400)
+            
+            try:
+                import sys
+                sys.path.insert(0, str(BASE_DIR))
+                from actions.face_id import enroll
+                
+                ok = enroll(frame_bytes, name)
+                
+                if ok:
+                    # Update user_name in config if this is the first enrollment
+                    try:
+                        import json as _json
+                        config_path = BASE_DIR / "config" / "api_keys.json"
+                        if config_path.exists():
+                            with open(config_path, "r", encoding="utf-8") as f:
+                                cfg = _json.load(f)
+                            if not cfg.get("user_name"):
+                                cfg["user_name"] = name
+                                with open(config_path, "w", encoding="utf-8") as f:
+                                    _json.dump(cfg, f, indent=4, ensure_ascii=False)
+                    except Exception:
+                        pass
+                    
+                    return JSONResponse({
+                        "ok": True,
+                        "message": f"Лицо '{name}' зарегистрировано"
+                    })
+                else:
+                    return JSONResponse({
+                        "ok": False,
+                        "error": "Лицо не обнаружено на фото. Попробуйте снова."
+                    })
+                    
+            except ImportError:
+                return JSONResponse({
+                    "ok": False,
+                    "error": "FaceID модуль недоступен"
+                }, status_code=500)
+            except Exception as e:
+                return JSONResponse({
+                    "ok": False,
+                    "error": f"Ошибка регистрации: {str(e)}"
+                }, status_code=500)
+
+        @app.post("/api/face-login")
+        async def face_login_ep(req: Request):
+            """Аутентификация по лицу владельца.
+            
+            Принимает JPEG frame в base64, сверяет с базой config/faces/,
+            возвращает {ok, authenticated, user_name, assistant_name}.
+            """
+            try:
+                body = await req.json()
+            except Exception:
+                return JSONResponse({"ok": False, "error": "Invalid request"}, status_code=400)
+            
+            b64_frame = str(body.get("frame") or "").strip()
+            if not b64_frame:
+                return JSONResponse({"ok": False, "error": "No frame provided"}, status_code=400)
+            
+            # Decode base64 JPEG
+            try:
+                # Remove data URI prefix if present
+                if b64_frame.startswith("data:"):
+                    b64_frame = b64_frame.split(",", 1)[1]
+                frame_bytes = base64.b64decode(b64_frame)
+            except Exception:
+                return JSONResponse({"ok": False, "error": "Invalid frame data"}, status_code=400)
+            
+            # Use FaceID engine to detect and identify faces
+            try:
+                import sys
+                sys.path.insert(0, str(BASE_DIR))
+                from actions.face_id import detect_faces, get_engine
+                
+                # Run detection and recognition
+                faces = detect_faces(frame_bytes)
+                
+                if not faces:
+                    return JSONResponse({
+                        "ok": True,
+                        "authenticated": False,
+                        "error": "Лицо не обнаружено. Подойдите ближе к камере."
+                    })
+                
+                # Check if any face is recognized (known=True)
+                recognized_face = None
+                for face in faces:
+                    if face.get("known"):
+                        recognized_face = face
+                        break
+                
+                if not recognized_face:
+                    return JSONResponse({
+                        "ok": True,
+                        "authenticated": False,
+                        "error": "Лицо не распознано. Доступ только для владельца."
+                    })
+                
+                # Success! Load config to get names
+                user_name = "Владелец"
+                assistant_name = "EDIT"
+                try:
+                    import json as _json
+                    config_path = BASE_DIR / "config" / "api_keys.json"
+                    if config_path.exists():
+                        with open(config_path, "r", encoding="utf-8") as f:
+                            cfg = _json.load(f)
+                            user_name = cfg.get("user_name") or "Владелец"
+                            assistant_name = cfg.get("assistant_name") or "EDIT"
+                except Exception:
+                    pass
+                
+                # Create session token
+                tok = secrets.token_urlsafe(32)
+                self._tokens.add(tok)
+                
+                # Generate a session key for this face auth session
+                face_session_key = f"face_{recognized_face['label']}_{int(time.time())}"
+                self._token_keys[tok] = face_session_key
+                
+                return JSONResponse({
+                    "ok": True,
+                    "authenticated": True,
+                    "user_name": user_name,
+                    "assistant_name": assistant_name,
+                    "face_label": recognized_face["label"],
+                    "confidence": recognized_face.get("detail", ""),
+                    "token": tok
+                })
+                
+            except ImportError as e:
+                return JSONResponse({
+                    "ok": False,
+                    "error": f"FaceID недоступен: {str(e)}"
+                }, status_code=500)
+            except Exception as e:
+                print(f"[FaceLogin] Error: {e}")
+                return JSONResponse({
+                    "ok": False,
+                    "error": "Ошибка распознавания лица"
+                }, status_code=500)
 
         @app.post("/api/revoke-devices")
         async def revoke_devices(req: Request):
