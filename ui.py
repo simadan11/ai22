@@ -2110,6 +2110,8 @@ class MainWindow(QMainWindow):
         self._feed_mode = "none"             # none | camera | scan | phonecam — who owns the HUD area
         self._pcam_px   = None               # latest phone live frame (QPixmap)
         self._pcam_dets: list = []           # latest live detections for that frame
+        self._scan_px   = None               # frozen EDITH scan frame (QPixmap)
+        self._scan_dets: list = []           # detections for that frozen frame
         self.devices_provider = None         # set by main.py: () -> list[dict]
         self.devices_kicker   = None         # set by main.py: (dev_id | "revoke") -> None
 
@@ -2230,8 +2232,150 @@ class MainWindow(QMainWindow):
     # --- Shared EDITH box painter -------------------------------------------
     _DET_COLORS = None   # lazily built QColor map
 
+    # Bone chain for the EDITH skeleton overlay
+    _BONES = (
+        ("head", "neck"),
+        ("neck", "l_shoulder"), ("neck", "r_shoulder"),
+        ("l_shoulder", "l_elbow"), ("l_elbow", "l_wrist"),
+        ("r_shoulder", "r_elbow"), ("r_elbow", "r_wrist"),
+        ("neck", "pelvis"),
+        ("l_shoulder", "l_hip"), ("r_shoulder", "r_hip"),
+        ("pelvis", "l_hip"), ("pelvis", "r_hip"), ("l_hip", "r_hip"),
+        ("l_hip", "l_knee"), ("l_knee", "l_ankle"),
+        ("r_hip", "r_knee"), ("r_knee", "r_ankle"),
+    )
+    _SKEL_COL   = QColor("#ff2d3d")     # bones — red, like the reference
+    _AURA_COL   = QColor("#ffa500")     # silhouette aura — orange
+
+    def _person_phase(self) -> float:
+        """0..1 animation phase shared by every person overlay (pulsing aura)."""
+        return (time.time() * 0.9) % 1.0
+
+    def _draw_person_fx(self, p: QPainter, d: dict, sw: int, sh: int,
+                        x: int, y: int, bw: int, bh: int) -> None:
+        """EDITH-style person effect: glowing silhouette aura + red bone rig."""
+        ph    = self._person_phase()
+        pulse = 0.5 + 0.5 * math.sin(ph * 2 * math.pi)
+
+        def _pt(q):
+            return QPointF(q[1] / 1000.0 * sw, q[0] / 1000.0 * sh)
+
+        # ── 1) silhouette outline (falls back to the bounding box) ─────────
+        outline = d.get("outline") or []
+        path = QPainterPath()
+        if isinstance(outline, (list, tuple)) and len(outline) >= 4:
+            pts = []
+            for q in outline[:40]:
+                if isinstance(q, (list, tuple)) and len(q) >= 2:
+                    try:
+                        pts.append(_pt([float(q[0]), float(q[1])]))
+                    except (TypeError, ValueError):
+                        pass
+            if len(pts) >= 4:
+                path.moveTo(pts[0])
+                for q in pts[1:]:
+                    path.lineTo(q)
+                path.closeSubpath()
+        if path.isEmpty():
+            path.addRoundedRect(QRectF(x, y, bw, bh), 10, 10)
+
+        # glowing aura — several progressively wider, fainter strokes
+        for i, (w, a) in enumerate(((11, 26), (7, 46), (4, 90), (2, 210))):
+            col = QColor(self._AURA_COL)
+            col.setAlpha(int(a * (0.65 + 0.35 * pulse)))
+            pen = QPen(col, w)
+            pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
+            pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+            p.setPen(pen)
+            p.setBrush(Qt.BrushStyle.NoBrush)
+            p.drawPath(path)
+
+        # soft inner fill so the target reads as "locked"
+        fill = QColor(self._AURA_COL)
+        fill.setAlpha(int(26 + 16 * pulse))
+        p.setPen(Qt.PenStyle.NoPen)
+        p.setBrush(QBrush(fill))
+        p.drawPath(path)
+        p.setBrush(Qt.BrushStyle.NoBrush)
+
+        # ── 2) skeleton / bone rig ─────────────────────────────────────────
+        pose = d.get("pose")
+        joints: dict[str, QPointF] = {}
+        if isinstance(pose, dict):
+            for k, q in pose.items():
+                if isinstance(q, (list, tuple)) and len(q) >= 2:
+                    try:
+                        joints[str(k)] = _pt([float(q[0]), float(q[1])])
+                    except (TypeError, ValueError):
+                        pass
+        if len(joints) < 3:
+            joints = self._fallback_skeleton(x, y, bw, bh)
+
+        # bone glow pass, then crisp bone pass
+        for w, a in ((5, 70), (2, 255)):
+            col = QColor(self._SKEL_COL)
+            col.setAlpha(int(a * (0.7 + 0.3 * pulse)) if a < 255 else 255)
+            pen = QPen(col, w)
+            pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+            p.setPen(pen)
+            for j1, j2 in self._BONES:
+                if j1 in joints and j2 in joints:
+                    p.drawLine(joints[j1], joints[j2])
+
+        # joint nodes
+        p.setPen(Qt.PenStyle.NoPen)
+        for name, q in joints.items():
+            r = 4.0 if name in ("head", "pelvis", "neck") else 2.6
+            halo = QColor(self._SKEL_COL); halo.setAlpha(90)
+            p.setBrush(QBrush(halo))
+            p.drawEllipse(q, r * 2.1, r * 2.1)
+            p.setBrush(QBrush(QColor("#fff0f0")))
+            p.drawEllipse(q, r, r)
+        p.setBrush(Qt.BrushStyle.NoBrush)
+
+        # ── 3) animated corner brackets around the target ──────────────────
+        col = QColor(self._AURA_COL)
+        col.setAlpha(int(150 + 105 * pulse))
+        p.setPen(QPen(col, 2))
+        cl = max(8, int(min(bw, bh) * 0.22))
+        pad = int(4 + 3 * pulse)
+        x0, y0 = x - pad, y - pad
+        x1, y1 = x + bw + pad, y + bh + pad
+        for bx, by, dx, dy in ((x0, y0, 1, 1), (x1, y0, -1, 1),
+                               (x0, y1, 1, -1), (x1, y1, -1, -1)):
+            p.drawLine(QPointF(bx, by), QPointF(bx + dx * cl, by))
+            p.drawLine(QPointF(bx, by), QPointF(bx, by + dy * cl))
+
+        # ── 4) scan line sweeping down the target ──────────────────────────
+        sy = y + bh * ph
+        gl = QLinearGradient(x, sy, x + bw, sy)
+        c0 = QColor(self._AURA_COL); c0.setAlpha(0)
+        c1 = QColor("#fff2cc");      c1.setAlpha(190)
+        gl.setColorAt(0.0, c0); gl.setColorAt(0.5, c1); gl.setColorAt(1.0, c0)
+        p.setPen(QPen(QBrush(gl), 2))
+        p.drawLine(QPointF(x, sy), QPointF(x + bw, sy))
+
+    @staticmethod
+    def _fallback_skeleton(x: int, y: int, bw: int, bh: int) -> dict:
+        """Anatomically-plausible rig derived from the bounding box alone,
+        used when the model didn't return pose keypoints."""
+        def P(fx, fy):
+            return QPointF(x + bw * fx, y + bh * fy)
+        return {
+            "head":       P(0.50, 0.07),
+            "neck":       P(0.50, 0.17),
+            "l_shoulder": P(0.31, 0.21), "r_shoulder": P(0.69, 0.21),
+            "l_elbow":    P(0.22, 0.39), "r_elbow":    P(0.78, 0.39),
+            "l_wrist":    P(0.19, 0.56), "r_wrist":    P(0.81, 0.56),
+            "pelvis":     P(0.50, 0.53),
+            "l_hip":      P(0.38, 0.55), "r_hip":      P(0.62, 0.55),
+            "l_knee":     P(0.37, 0.75), "r_knee":     P(0.63, 0.75),
+            "l_ankle":    P(0.36, 0.96), "r_ankle":    P(0.64, 0.96),
+        }
+
     def _draw_dets_on(self, px2: QPixmap, detections) -> None:
-        """Paint labeled detection boxes (0-1000 normalized) onto a pixmap."""
+        """Paint labeled detection boxes (0-1000 normalized) onto a pixmap.
+        People additionally get the EDITH silhouette-aura + skeleton effect."""
         if self._DET_COLORS is None:
             type(self)._DET_COLORS = {
                 "person":  QColor("#f97316"),
@@ -2241,6 +2385,7 @@ class MainWindow(QMainWindow):
         sw, sh = px2.width(), px2.height()
         p = QPainter(px2)
         try:
+            p.setRenderHint(QPainter.RenderHint.Antialiasing)
             p.setFont(QFont("Courier New", 8, QFont.Weight.Bold))
             for d in (detections or [])[:12]:
                 box = d.get("box") or []
@@ -2254,20 +2399,29 @@ class MainWindow(QMainWindow):
                     continue
                 if xmax - xmin < 5 or ymax - ymin < 5:
                     continue
-                col = self._DET_COLORS.get(d.get("kind"), self._DET_COLORS["object"])
-                pen = QPen(col)
-                pen.setWidth(2)
-                p.setPen(pen)
+                kind = d.get("kind")
+                col  = self._DET_COLORS.get(kind, self._DET_COLORS["object"])
                 x  = int(xmin / 1000 * sw)
                 y  = int(ymin / 1000 * sh)
                 bw = int((xmax - xmin) / 1000 * sw)
                 bh = int((ymax - ymin) / 1000 * sh)
-                p.drawRect(x, y, bw, bh)
+
+                if kind == "person":
+                    # full EDITH treatment: aura outline + bones + brackets
+                    self._draw_person_fx(p, d, sw, sh, x, y, bw, bh)
+                else:
+                    pen = QPen(col)
+                    pen.setWidth(2)
+                    p.setPen(pen)
+                    p.setBrush(Qt.BrushStyle.NoBrush)
+                    p.drawRect(x, y, bw, bh)
+
                 label = str(d.get("label") or "TARGET").upper()[:42]
                 fm    = p.fontMetrics()
                 tw    = min(fm.horizontalAdvance(label) + 10, sw)
                 th    = fm.height() + 4
                 ly    = y - th if y - th > 0 else y
+                p.setPen(Qt.PenStyle.NoPen)
                 p.fillRect(x, ly, tw, th, col)
                 p.setPen(QPen(QColor("#04070c")))
                 p.drawText(QRectF(x + 5, ly, tw - 8, th),
@@ -2320,6 +2474,7 @@ class MainWindow(QMainWindow):
             )
         self._draw_dets_on(px2, self._pcam_dets)
         self._cam_live_lbl.setPixmap(px2)
+        self._sync_fx_timer()
 
     # --- Phone scan overlay (EDITH snapshot with detection boxes) ----------
     def _on_phone_scan(self, img_bytes: bytes, detections) -> None:
@@ -2332,24 +2487,61 @@ class MainWindow(QMainWindow):
         self._cam_title.setText("◈  PHONE SCAN — EDITH")
         self._hud_cam_stack.setCurrentIndex(1)
 
+        self._scan_px   = px
+        self._scan_dets = detections or []
+        self._repaint_scan()
+        self._sync_fx_timer()
+        QTimer.singleShot(20000, self._leave_scan)
+
+    def _repaint_scan(self) -> None:
+        if getattr(self, "_scan_px", None) is None:
+            return
         w, h = self._cam_live_lbl.width(), self._cam_live_lbl.height()
         if w <= 1 or h <= 1:
-            px2 = px
+            px2 = QPixmap(self._scan_px)
         else:
-            px2 = px.scaled(
+            px2 = self._scan_px.scaled(
                 w, h,
                 Qt.AspectRatioMode.KeepAspectRatio,
                 Qt.TransformationMode.SmoothTransformation,
             )
-        self._draw_dets_on(px2, detections)
+        self._draw_dets_on(px2, self._scan_dets)
         self._cam_live_lbl.setPixmap(px2)
-        QTimer.singleShot(20000, self._leave_scan)
+
+    # --- EDITH person-effect animation --------------------------------------
+    def _has_person(self) -> bool:
+        dets = (self._scan_dets if self._feed_mode == "scan" else self._pcam_dets)
+        return any((d or {}).get("kind") == "person" for d in (dets or []))
+
+    def _sync_fx_timer(self) -> None:
+        """Run a ~20 fps repaint loop while a human target is highlighted so the
+        aura pulses / scan line sweeps even on a frozen snapshot."""
+        if not hasattr(self, "_fx_tmr"):
+            self._fx_tmr = QTimer(self)
+            self._fx_tmr.setInterval(50)
+            self._fx_tmr.timeout.connect(self._fx_tick)
+        if self._feed_mode in ("scan", "phonecam") and self._has_person():
+            if not self._fx_tmr.isActive():
+                self._fx_tmr.start()
+        elif self._fx_tmr.isActive():
+            self._fx_tmr.stop()
+
+    def _fx_tick(self) -> None:
+        if self._feed_mode == "scan":
+            self._repaint_scan()
+        elif self._feed_mode == "phonecam":
+            self._repaint_pcam()
+        else:
+            self._fx_tmr.stop()
 
     def _leave_scan(self) -> None:
         if self._feed_mode == "scan":
             self._feed_mode = "none"
             self._hud_cam_stack.setCurrentIndex(0)
             self._cam_live_lbl.clear()
+        self._scan_px   = None
+        self._scan_dets = []
+        self._sync_fx_timer()
 
     # ------------------------------------------------------------------
     # Icon generation — arc-reactor style, rendered with Pillow

@@ -403,6 +403,16 @@ _HUD_PROMPT = (
     "anything else → short common name like 'LAPTOP', 'CAR KEYS'. "
     "For people describe ONLY visible appearance/clothing/pose — never guess names "
     "or identities. Prefer precise small boxes over big loose ones. "
+    "EXTRA FOR EVERY PERSON (kind == \"person\") add two more fields: "
+    '"outline": an array of 10-24 [y, x] points (integers 0-1000) tracing the '
+    "silhouette of that person (head, shoulders, arms, torso, legs) as a closed "
+    "polygon in clockwise order; "
+    '"pose": an object mapping joint names to [y, x] integer 0-1000 points, using '
+    "ONLY these keys and only the joints you can actually see: head, neck, "
+    "l_shoulder, r_shoulder, l_elbow, r_elbow, l_wrist, r_wrist, pelvis, l_hip, "
+    "r_hip, l_knee, r_knee, l_ankle, r_ankle. "
+    "Both are in the SAME normalized image coordinates as box. Omit outline/pose "
+    "for non-person items. "
     "Max 12 items. If nothing notable is visible return []."
 )
 
@@ -430,6 +440,49 @@ def _decode_frame(body: dict) -> bytes:
             f"frame too large (max {_MAX_FRAME_BYTES // (1024 * 1024)} MB)", 413
         )
     return raw
+
+
+# Joint names accepted for the EDITH skeleton overlay
+_POSE_JOINTS = (
+    "head", "neck", "l_shoulder", "r_shoulder", "l_elbow", "r_elbow",
+    "l_wrist", "r_wrist", "pelvis", "l_hip", "r_hip",
+    "l_knee", "r_knee", "l_ankle", "r_ankle",
+)
+
+
+def _norm_pt(p):
+    """[y, x] (or {"y":..,"x":..}) → clamped (y, x) floats in 0-1000, else None."""
+    if isinstance(p, dict):
+        p = [p.get("y"), p.get("x")]
+    if not (isinstance(p, (list, tuple)) and len(p) >= 2):
+        return None
+    try:
+        y, x = float(p[0]), float(p[1])
+    except (TypeError, ValueError):
+        return None
+    if y != y or x != x:                       # NaN guard
+        return None
+    return [max(0.0, min(1000.0, y)), max(0.0, min(1000.0, x))]
+
+
+def _norm_outline(raw) -> list:
+    """Silhouette polygon → list of [y, x] points (max 40)."""
+    if not isinstance(raw, (list, tuple)):
+        return []
+    pts = [q for q in (_norm_pt(p) for p in raw[:40]) if q]
+    return pts if len(pts) >= 4 else []
+
+
+def _norm_pose(raw) -> dict:
+    """Joint map → {joint: [y, x]} keeping only known, valid joints."""
+    if not isinstance(raw, dict):
+        return {}
+    pose = {}
+    for k in _POSE_JOINTS:
+        q = _norm_pt(raw.get(k))
+        if q:
+            pose[k] = q
+    return pose if len(pose) >= 3 else {}
 
 
 def _edith_detect(image_bytes: bytes) -> list[dict]:
@@ -471,12 +524,20 @@ def _edith_detect(image_bytes: bytes) -> list[dict]:
         kind = str(item.get("kind", "")).lower()
         if kind not in ("person", "vehicle"):
             kind = "object"
-        out.append({
+        det = {
             "label":  str(item.get("label") or "TARGET")[:60],
             "kind":   kind,
             "detail": str(item.get("detail") or "")[:120],
             "box":    box,
-        })
+        }
+        if kind == "person":
+            outline = _norm_outline(item.get("outline") or item.get("contour"))
+            if outline:
+                det["outline"] = outline
+            pose = _norm_pose(item.get("pose") or item.get("keypoints"))
+            if pose:
+                det["pose"] = pose
+        out.append(det)
         if len(out) >= 12:
             break
     return out

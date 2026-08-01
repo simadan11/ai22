@@ -214,6 +214,36 @@
       text-shadow: 0 1px 3px #000;
     }
     .tag-p .tag-d { color: #fdba74; }
+    /* ── EDITH person effect: silhouette aura + bone rig ──────────────── */
+    #cam-fx { position: absolute; inset: 0; pointer-events: none; overflow: hidden; }
+    #cam-fx svg { position: absolute; inset: 0; width: 100%; height: 100%; }
+    .fx-aura {
+      fill: rgba(255,165,0,0.13); stroke: #ffa500; stroke-width: 2.5;
+      stroke-linejoin: round; stroke-linecap: round;
+      filter: drop-shadow(0 0 6px rgba(255,165,0,0.95))
+              drop-shadow(0 0 16px rgba(255,140,0,0.55));
+      animation: fx-breathe 1.6s ease-in-out infinite;
+    }
+    .fx-aura-glow {
+      fill: none; stroke: #ff8c00; stroke-width: 9; stroke-linejoin: round;
+      opacity: 0.28; filter: blur(4px);
+      animation: fx-breathe 1.6s ease-in-out infinite;
+    }
+    .fx-bone {
+      stroke: #ff2d3d; stroke-width: 2.4; stroke-linecap: round; fill: none;
+      filter: drop-shadow(0 0 4px rgba(255,45,61,0.9));
+    }
+    .fx-joint { fill: #fff0f0; stroke: #ff2d3d; stroke-width: 1.4; }
+    .fx-sweep {
+      stroke: #fff2cc; stroke-width: 2; opacity: 0.85;
+      filter: drop-shadow(0 0 6px rgba(255,220,150,0.9));
+      animation: fx-sweep 2.2s linear infinite;
+    }
+    @keyframes fx-breathe { 0%,100% { opacity: 0.75; } 50% { opacity: 1; } }
+    @keyframes fx-sweep   { 0% { transform: translateY(0); } 100% { transform: translateY(var(--fxh, 100px)); } }
+    @keyframes fx-in      { from { opacity: 0; } to { opacity: 1; } }
+    .fx-g { animation: fx-in .3s ease; }
+
     .cam-scanline {
       position: absolute; left: 0; right: 0; height: 90px; pointer-events: none;
       background: linear-gradient(to bottom, transparent, rgba(34,211,238,0.10), transparent);
@@ -331,6 +361,7 @@
   <!-- ── EDITH camera overlay ─────────────────────────────────────────── -->
   <div id="cam-overlay">
     <video id="cam-video" autoplay playsinline muted></video>
+    <div id="cam-fx"></div>
     <div id="cam-boxes"></div>
     <div class="cam-scanline"></div>
     <span class="cf cf-tl"></span><span class="cf cf-tr"></span>
@@ -876,6 +907,7 @@
     const camOverlay = document.getElementById('cam-overlay');
     const camVideo   = document.getElementById('cam-video');
     const camBoxes   = document.getElementById('cam-boxes');
+    const camFx      = document.getElementById('cam-fx');
     const camStatus  = document.getElementById('cam-status');
     const camTargets = document.getElementById('cam-targets');
     const camLogEl   = document.getElementById('cam-log');
@@ -924,14 +956,14 @@
       _stopCamStream();
       camVideo.srcObject = null;
       _lastDets = [];
-      camBoxes.innerHTML = '';
+      camBoxes.innerHTML = ''; camFx.innerHTML = '';
       camTargets.textContent = 'NO TARGETS';
     }
 
     async function flipCamera() {
       stopLive();
       _facing = (_facing === 'environment') ? 'user' : 'environment';
-      _lastDets = []; camBoxes.innerHTML = '';
+      _lastDets = []; camBoxes.innerHTML = ''; camFx.innerHTML = '';
       if (camOverlay.classList.contains('open')) await _startCamStream();
     }
 
@@ -1003,7 +1035,7 @@
       btn.disabled = true; btn.style.opacity = '0.45'; btn.textContent = '···';
       const qInp = document.getElementById('cam-q');
       const question = qInp.value.trim();
-      _lastDets = []; camBoxes.innerHTML = '';
+      _lastDets = []; camBoxes.innerHTML = ''; camFx.innerHTML = '';
       camStatus.textContent  = 'SCANNING — ANALYZING FEED…';
       camTargets.textContent = 'PROCESSING…';
       const headers = Object.assign({ 'Content-Type': 'application/json' }, _authHeader());
@@ -1036,8 +1068,96 @@
       if (e.key === 'Enter') { e.preventDefault(); doScan(); }
     });
 
+    // ── EDITH person effect: silhouette aura + skeleton ─────────────────────
+    const _BONES = [
+      ['head','neck'],['neck','l_shoulder'],['neck','r_shoulder'],
+      ['l_shoulder','l_elbow'],['l_elbow','l_wrist'],
+      ['r_shoulder','r_elbow'],['r_elbow','r_wrist'],
+      ['neck','pelvis'],['l_shoulder','l_hip'],['r_shoulder','r_hip'],
+      ['pelvis','l_hip'],['pelvis','r_hip'],['l_hip','r_hip'],
+      ['l_hip','l_knee'],['l_knee','l_ankle'],
+      ['r_hip','r_knee'],['r_knee','r_ankle'],
+    ];
+
+    function _fallbackRig(x, y, w, h) {
+      const P = (fx, fy) => [x + w * fx, y + h * fy];
+      return {
+        head: P(.50,.07), neck: P(.50,.17),
+        l_shoulder: P(.31,.21), r_shoulder: P(.69,.21),
+        l_elbow: P(.22,.39),    r_elbow: P(.78,.39),
+        l_wrist: P(.19,.56),    r_wrist: P(.81,.56),
+        pelvis: P(.50,.53),
+        l_hip: P(.38,.55),      r_hip: P(.62,.55),
+        l_knee: P(.37,.75),     r_knee: P(.63,.75),
+        l_ankle: P(.36,.96),    r_ankle: P(.64,.96),
+      };
+    }
+
+    function _drawPersonFx(d, geom, x, y, w, h) {
+      const { dw, dh, offX, offY, mirror } = geom;
+      const NS = 'http://www.w3.org/2000/svg';
+      const svg = document.createElementNS(NS, 'svg');
+      svg.setAttribute('class', 'fx-g');
+      const mk = (t, attrs) => {
+        const e = document.createElementNS(NS, t);
+        for (const k in attrs) e.setAttribute(k, attrs[k]);
+        return e;
+      };
+      // normalized [y,x] (0-1000) → screen px, honouring mirror + object-fit cover
+      const pt = q => {
+        let ny = +q[0], nx = +q[1];
+        if (!isFinite(ny) || !isFinite(nx)) return null;
+        if (mirror) nx = 1000 - nx;
+        return [(nx / 1000) * dw - offX, (ny / 1000) * dh - offY];
+      };
+
+      // 1) silhouette outline (fallback: rounded bounding box)
+      let poly = null;
+      if (Array.isArray(d.outline) && d.outline.length >= 4) {
+        const pts = d.outline.slice(0, 40).map(pt).filter(Boolean);
+        if (pts.length >= 4) poly = pts.map(p => p.join(',')).join(' ');
+      }
+      if (poly) {
+        svg.appendChild(mk('polygon', { points: poly, class: 'fx-aura-glow' }));
+        svg.appendChild(mk('polygon', { points: poly, class: 'fx-aura' }));
+      } else {
+        const r = { x, y, width: w, height: h, rx: 10, ry: 10 };
+        svg.appendChild(mk('rect', { ...r, class: 'fx-aura-glow' }));
+        svg.appendChild(mk('rect', { ...r, class: 'fx-aura' }));
+      }
+
+      // 2) bone rig
+      const joints = {};
+      if (d.pose && typeof d.pose === 'object') {
+        for (const k in d.pose) {
+          const p = pt(d.pose[k]);
+          if (p) joints[k] = p;
+        }
+      }
+      const rig = Object.keys(joints).length >= 3 ? joints : _fallbackRig(x, y, w, h);
+      _BONES.forEach(([a, b]) => {
+        if (!rig[a] || !rig[b]) return;
+        svg.appendChild(mk('line', {
+          x1: rig[a][0], y1: rig[a][1], x2: rig[b][0], y2: rig[b][1], class: 'fx-bone',
+        }));
+      });
+      for (const k in rig) {
+        const big = (k === 'head' || k === 'neck' || k === 'pelvis');
+        svg.appendChild(mk('circle', {
+          cx: rig[k][0], cy: rig[k][1], r: big ? 4 : 2.6, class: 'fx-joint',
+        }));
+      }
+
+      // 3) scan line sweeping down the target
+      const sweep = mk('line', { x1: x, y1: y, x2: x + w, y2: y, class: 'fx-sweep' });
+      sweep.style.setProperty('--fxh', h + 'px');
+      svg.appendChild(sweep);
+
+      camFx.appendChild(svg);
+    }
+
     function _drawBoxes() {
-      camBoxes.innerHTML = '';
+      camBoxes.innerHTML = ''; camFx.innerHTML = '';
       const vw = camVideo.videoWidth,  vh = camVideo.videoHeight;
       const cw = camVideo.clientWidth, ch = camVideo.clientHeight;
       if (!vw || !vh || !cw || !ch) return;
@@ -1080,6 +1200,12 @@
           el.appendChild(det);
         }
         camBoxes.appendChild(el);
+        if (d.kind === 'person') {
+          const px = ((xmin / 1000) * dw - offX);
+          const py = ((ymin / 1000) * dh - offY);
+          _drawPersonFx(d, { dw, dh, offX, offY, mirror }, px, py,
+                        ((xmax - xmin) / 1000) * dw, ((ymax - ymin) / 1000) * dh);
+        }
         drawn++;
         if (d.kind === 'person') persons++;
         else if (d.kind === 'vehicle') vehicles++;
