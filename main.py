@@ -1472,6 +1472,7 @@ class JarvisLive:
         last_det = 0.0
         det_task = None
         trk_task = None
+        last_trk = 0.0
         self._live_labels: list = []      # newest Gemini labels (slow path)
         while True:
             try:
@@ -1507,10 +1508,13 @@ class JarvisLive:
             except Exception:
                 pass
 
-            # ── FAST PATH: local per-frame person tracking (skeleton + aura).
-            #    Runs on every frame so the overlay sticks to the moving body
-            #    instead of waiting ~1.5 s for the cloud model.
-            if trk_task is None or trk_task.done():
+            # ── FAST PATH: local person tracking (skeleton + aura).
+            #    Capped at ~30 Hz: the HUD interpolates/animates at 60 FPS on
+            #    top of these results, and tracking every single frame would
+            #    steal CPU from the render loop and drop the display below 60.
+            if (now_t := time.monotonic()) - last_trk >= 0.033 and (
+                    trk_task is None or trk_task.done()):
+                last_trk = now_t
                 trk_task = asyncio.create_task(self._live_track_task(frame))
 
             # ── SLOW PATH: Gemini labels/objects, refreshed occasionally.

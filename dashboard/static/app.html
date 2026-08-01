@@ -986,7 +986,7 @@
     }
 
     // ── LIVE — stream the phone camera onto the PC HUD ──────────────────────
-    let _liveWs = null, _liveTimer = null;
+    let _liveWs = null, _liveTimer = null, _liveRaf = null;
 
     function toggleLive() {
       if (_liveWs || _liveTimer) { stopLive(); return; }
@@ -1002,13 +1002,23 @@
         btn.classList.add('on'); btn.textContent = '⏹';
         camStatus.textContent = 'STREAMING TO PC — LIVE';
         toast('📡 Live on PC');
-        // ~3 fps of small JPEGs is plenty for a LAN preview and keeps
-        // bandwidth light for the detection pass that runs alongside
-        _liveTimer = setInterval(() => {
-          if (ws.readyState !== 1) return;
-          const f = _grabFrame(560, 0.55);
+        // Target 60 FPS. Driven by requestAnimationFrame (which is already
+        // vsync-aligned) instead of a fixed timer, and back-pressured on
+        // ws.bufferedAmount so a slow link drops frames rather than piling
+        // up latency.
+        const FRAME_MS = 1000 / 60;
+        let _lastSend = 0;
+        const pump = (now) => {
+          if (!_liveWs || ws.readyState !== 1) return;
+          _liveRaf = requestAnimationFrame(pump);
+          if (now - _lastSend < FRAME_MS) return;
+          // skip while the socket is still draining the previous frames
+          if (ws.bufferedAmount > 512 * 1024) return;
+          _lastSend = now;
+          const f = _grabFrame(640, 0.5);
           if (f) ws.send(_b64ToBytes(f));
-        }, 320);
+        };
+        _liveRaf = requestAnimationFrame(pump);
       };
       ws.onclose = () => stopLive();
       ws.onerror = () => stopLive();
@@ -1016,6 +1026,7 @@
 
     function stopLive() {
       if (_liveTimer) { clearInterval(_liveTimer); _liveTimer = null; }
+      if (_liveRaf) { cancelAnimationFrame(_liveRaf); _liveRaf = null; }
       if (_liveWs) {
         const w = _liveWs; _liveWs = null;
         if (w.readyState < 2) w.close();
