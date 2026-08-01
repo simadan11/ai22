@@ -43,14 +43,30 @@ _YUNET_URLS = (
 _MATCH_THRESHOLD = 72.0
 
 
+def _model_ok(p) -> bool:
+    """A model file must be big enough and not be an HTML error page."""
+    try:
+        if not p.exists() or p.stat().st_size < 20_000:
+            return False
+        head = p.open("rb").read(200).lstrip().lower()
+        return not head.startswith((b"<!doctype", b"<html", b"{",
+                                    b"version https://git-lfs"))
+    except Exception:
+        return False
+
+
 def _download(url: str, dest: Path, timeout: int = 20) -> bool:
     try:
         with urllib.request.urlopen(url, timeout=timeout) as r:   # noqa: S310
             data = r.read()
-        if len(data) > 1000:
+        head = data[:200].lstrip().lower()
+        if len(data) > 20_000 and not head.startswith(
+                (b"<!doctype", b"<html", b"{", b"version https://git-lfs")):
             dest.parent.mkdir(parents=True, exist_ok=True)
             dest.write_bytes(data)
             return True
+        print(f"[{'FaceDB' if 'face_db' in __file__ else 'FaceID'}] "
+              f"rejected invalid download")
     except Exception:
         pass
     return False
@@ -60,7 +76,8 @@ class FaceEngine:
     """Thread-safe face detector + optional identity recogniser."""
 
     def __init__(self):
-        self._lock = threading.Lock()
+        # RLock: detect() holds it while calling helpers that lock again.
+        self._lock = threading.RLock()
         self._ready = False
         self._cv2 = None
         self._np = None
@@ -95,7 +112,7 @@ class FaceEngine:
                         if _download(u, _YUNET_FILE):
                             print("[FaceID] YuNet model downloaded")
                             break
-                if _YUNET_FILE.exists() and hasattr(cv2, "FaceDetectorYN_create"):
+                if _model_ok(_YUNET_FILE) and hasattr(cv2, "FaceDetectorYN_create"):
                     self._yunet = cv2.FaceDetectorYN_create(
                         str(_YUNET_FILE), "", (320, 320), 0.6, 0.3, 5000
                     )
@@ -184,7 +201,8 @@ class FaceEngine:
                                cv2.IMREAD_COLOR)
             if bgr is None:
                 return False
-            boxes = self._detect_boxes(bgr)
+            with self._lock:
+                boxes = self._detect_boxes(bgr)
             if not boxes:
                 return False
             person_dir = _FACES_DIR / name.strip()
@@ -283,11 +301,15 @@ class FaceEngine:
             return []
 
     def _largest_face_crop(self, gray):
-        """Grayscale image → 160×160 crop of the biggest face, or None."""
+        """Grayscale image → 160×160 crop of the biggest face, or None.
+
+        Caller already holds self._lock (RLock makes the nesting safe).
+        """
         cv2 = self._cv2
         try:
             bgr = cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR)
-            boxes = self._detect_boxes(bgr)
+            with self._lock:
+                boxes = self._detect_boxes(bgr)
             if not boxes:
                 return None
             x, y, w, h = max(boxes, key=lambda b: b[2] * b[3])
@@ -370,7 +392,11 @@ class FaceEngine:
             if crop.size == 0:
                 return None, 0.0
             crop = cv2.resize(crop, (160, 160))
-            label, dist = self._recognizer.predict(crop)
+            # LBPH predict() is native and not thread-safe — serialise it.
+            with self._lock:
+                if self._recognizer is None:
+                    return None, 0.0
+                label, dist = self._recognizer.predict(crop)
             if dist <= _MATCH_THRESHOLD:
                 name = self._labels.get(int(label))
                 if name:

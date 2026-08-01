@@ -56,14 +56,30 @@ _SFACE_THRESHOLD = 0.40
 _GEOM_THRESHOLD = 0.9995
 
 
+def _model_ok(p) -> bool:
+    """A model file must be big enough and not be an HTML error page."""
+    try:
+        if not p.exists() or p.stat().st_size < 20_000:
+            return False
+        head = p.open("rb").read(200).lstrip().lower()
+        return not head.startswith((b"<!doctype", b"<html", b"{",
+                                    b"version https://git-lfs"))
+    except Exception:
+        return False
+
+
 def _download(url: str, dest: Path, timeout: int = 25) -> bool:
     try:
         with urllib.request.urlopen(url, timeout=timeout) as r:   # noqa: S310
             data = r.read()
-        if len(data) > 1000:
+        head = data[:200].lstrip().lower()
+        if len(data) > 20_000 and not head.startswith(
+                (b"<!doctype", b"<html", b"{", b"version https://git-lfs")):
             dest.parent.mkdir(parents=True, exist_ok=True)
             dest.write_bytes(data)
             return True
+        print(f"[{'FaceDB' if 'face_db' in __file__ else 'FaceID'}] "
+              f"rejected invalid download")
     except Exception as e:
         print(f"[FaceDB] download failed: {e}")
     return False
@@ -82,7 +98,12 @@ class FaceDB:
     """Face-print encoder + vector store (Milvus Lite, JSON fallback)."""
 
     def __init__(self):
-        self._lock = threading.Lock()
+        # Re-entrant: encode() may be called while other helpers already hold
+        # the lock. A plain Lock would self-deadlock.
+        self._lock = threading.RLock()
+        # Dedicated lock for native model inference (not re-entrant safe in
+        # OpenCV) so it never contends with plain store operations.
+        self._infer_lock = threading.RLock()
         self._ready = False
         self._cv2 = None
         self._np = None
@@ -117,7 +138,7 @@ class FaceDB:
                         if _download(u, _SFACE_FILE):
                             print("[FaceDB] SFace model downloaded")
                             break
-                if _SFACE_FILE.exists() and hasattr(self._cv2,
+                if _model_ok(_SFACE_FILE) and hasattr(self._cv2,
                                                     "FaceRecognizerSF_create"):
                     self._sface = self._cv2.FaceRecognizerSF_create(
                         str(_SFACE_FILE), ""
@@ -212,6 +233,25 @@ class FaceDB:
             return None
         try:
             if self._sface is not None:
+                # OpenCV DNN inference is not re-entrant: two threads calling
+                # alignCrop()/feature() on the same net corrupts its internal
+                # blobs and crashes the process (0xC0000005 on Windows).
+                with self._infer_lock:
+                    return self._encode_sface(bgr, box, landmarks)
+
+            # geometry encoder — needs the dense mesh
+            if landmarks is not None and len(landmarks) >= 68:
+                return self._encode_geometry(landmarks)
+            return None
+        except Exception as e:
+            print(f"[FaceDB] encode failed: {e}")
+            return None
+
+    def _encode_sface(self, bgr, box, landmarks) -> list[float] | None:
+        """Run SFace. Caller MUST hold self._lock."""
+        cv2, np = self._cv2, self._np
+        try:
+            if True:
                 h, w = bgr.shape[:2]
                 if landmarks is not None and len(landmarks) >= 5:
                     row = list(box or [0, 0, w, h]) + [
@@ -232,13 +272,8 @@ class FaceDB:
                 aligned = self._sface.alignCrop(bgr, det[0])
                 feat = self._sface.feature(aligned)
                 return _norm([float(v) for v in np.asarray(feat).ravel()])
-
-            # geometry encoder — needs the dense mesh
-            if landmarks is not None and len(landmarks) >= 68:
-                return self._encode_geometry(landmarks)
-            return None
         except Exception as e:
-            print(f"[FaceDB] encode failed: {e}")
+            print(f"[FaceDB] sface encode failed: {e}")
             return None
 
     def _encode_geometry(self, pts) -> list[float] | None:

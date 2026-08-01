@@ -99,8 +99,12 @@ class _Engine:
         self.face = None
         self.face_edges = []
         try:
-            face_model = str(Path(model_path).parent / "face_landmarker.task")
-            if Path(face_model).exists():
+            fm = Path(model_path).parent / "face_landmarker.task"
+            face_model = str(fm)
+            ok_fm = (fm.exists() and fm.stat().st_size > 500_000
+                     and not fm.open("rb").read(200).lstrip().lower()
+                     .startswith((b"<!doctype", b"<html", b"{")))
+            if ok_fm:
                 fopts = mp_vision.FaceLandmarkerOptions(
                     base_options=mp_python.BaseOptions(
                         model_asset_path=face_model

@@ -60,6 +60,23 @@ _MODEL_URLS = (
 )
 
 
+def _valid_model(p, min_size: int = 500_000) -> bool:
+    """Reject truncated files and HTML error pages saved as models.
+
+    Feeding such a file to MediaPipe/OpenCV crashes the process natively
+    (0xC0000005 / SIGSEGV), which no Python try/except can catch.
+    """
+    try:
+        if not p.exists() or p.stat().st_size < min_size:
+            return False
+        head = p.open("rb").read(200).lstrip().lower()
+        return not head.startswith(
+            (b"<!doctype", b"<html", b"{", b"version https://git-lfs")
+        )
+    except Exception:
+        return False
+
+
 def _model_path() -> Path:
     base = Path(__file__).resolve().parent.parent / "config"
     base.mkdir(parents=True, exist_ok=True)
@@ -77,19 +94,26 @@ _FACE_MODEL_URLS = (
 def _ensure_face_model() -> Path | None:
     """Fetch the 478-point face-mesh model (optional, enables the mask FX)."""
     p = _model_path().parent / "face_landmarker.task"
-    if p.exists() and p.stat().st_size > 1000:
+    if _valid_model(p):
         return p
+    if p.exists():
+        print("[PoseTracker] Existing face model is corrupt — re-downloading")
+        try:
+            p.unlink()
+        except Exception:
+            pass
     for url in _FACE_MODEL_URLS:
         tmp = p.with_suffix(".part")
         try:
             print("[PoseTracker] Downloading face-mesh model (one time)…")
             with urllib.request.urlopen(url, timeout=20) as r:   # noqa: S310
                 data = r.read()
-            if len(data) > 1000:
-                tmp.write_bytes(data)
+            tmp.write_bytes(data)
+            if _valid_model(tmp):
                 tmp.replace(p)
                 print("[PoseTracker] Face-mesh model ready")
                 return p
+            print("[PoseTracker] Downloaded face model is invalid")
         except Exception as e:
             print(f"[PoseTracker] Face-mesh model unavailable ({e})")
         finally:
@@ -107,8 +131,14 @@ def _ensure_model() -> Path | None:
     manually (e.g. on an offline machine) and it will be picked up here.
     """
     p = _model_path()
-    if p.exists() and p.stat().st_size > 1000:
+    if _valid_model(p):
         return p
+    if p.exists():
+        print("[PoseTracker] Existing pose model is corrupt — re-downloading")
+        try:
+            p.unlink()
+        except Exception:
+            pass
     for url in _MODEL_URLS:
         tmp = p.with_suffix(".part")
         try:
@@ -117,11 +147,12 @@ def _ensure_model() -> Path | None:
             # forever on a dead network — always bound it.
             with urllib.request.urlopen(url, timeout=20) as r:   # noqa: S310
                 data = r.read()
-            if len(data) > 1000:
-                tmp.write_bytes(data)
+            tmp.write_bytes(data)
+            if _valid_model(tmp):
                 tmp.replace(p)
                 print(f"[PoseTracker] Model ready → {p.name}")
                 return p
+            print("[PoseTracker] Downloaded file is not a valid model")
         except Exception as e:
             print(f"[PoseTracker] Model source unavailable ({e})")
         finally:
