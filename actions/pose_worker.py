@@ -25,6 +25,7 @@ import math
 import os
 import struct
 import sys
+from pathlib import Path
 
 # stdout must stay a clean binary channel
 _OUT = sys.stdout.buffer
@@ -93,6 +94,33 @@ class _Engine:
         )
         self.landmarker = mp_vision.PoseLandmarker.create_from_options(opts)
 
+        # ── Face mesh (478 landmarks) — optional, enabled when the model file
+        #    is present next to the pose model.
+        self.face = None
+        self.face_edges = []
+        try:
+            face_model = str(Path(model_path).parent / "face_landmarker.task")
+            if Path(face_model).exists():
+                fopts = mp_vision.FaceLandmarkerOptions(
+                    base_options=mp_python.BaseOptions(
+                        model_asset_path=face_model
+                    ),
+                    running_mode=mp_vision.RunningMode.VIDEO,
+                    num_faces=max_people,
+                    min_face_detection_confidence=0.5,
+                    min_tracking_confidence=0.5,
+                )
+                self.face = mp_vision.FaceLandmarker.create_from_options(fopts)
+                conns = mp_vision.FaceLandmarksConnections
+                self.face_edges = [
+                    [c.start, c.end]
+                    for c in conns.FACE_LANDMARKS_TESSELATION
+                ]
+                _log(f"face mesh ready ({len(self.face_edges)} edges)")
+        except Exception as e:
+            _log(f"face mesh unavailable: {e}")
+            self.face = None
+
     # ── main entry ──────────────────────────────────────────────────────
     def process(self, frame: bytes) -> list:
         import mediapipe as mp
@@ -118,7 +146,11 @@ class _Engine:
         self._last_ts += 33
         res = self.landmarker.detect_for_video(image, self._last_ts)
 
+        faces = self._face_mesh(image, self._last_ts)
+
         out = []
+        for f in faces:
+            out.append(f)
         lms = getattr(res, "pose_landmarks", None) or []
         masks = getattr(res, "segmentation_masks", None) or []
         for i, person in enumerate(lms[: self.max_people]):
@@ -150,6 +182,40 @@ class _Engine:
                 "pose": pose,
                 "outline": outline,
                 "source": "local",
+            })
+        return out
+
+    def _face_mesh(self, image, ts: int) -> list:
+        """Detect face meshes → HUD detections carrying the full point cloud."""
+        if self.face is None:
+            return []
+        try:
+            fres = self.face.detect_for_video(image, ts)
+        except Exception as e:
+            _log(f"face mesh failed: {e}")
+            return []
+        out = []
+        for lm in (getattr(fres, "face_landmarks", None) or []):
+            pts, xs, ys = [], [], []
+            for p in lm:
+                x, y = float(p.x), float(p.y)
+                if not (math.isfinite(x) and math.isfinite(y)):
+                    x = y = 0.0
+                x = max(0.0, min(1.0, x))
+                y = max(0.0, min(1.0, y))
+                pts.append([round(y * 1000, 1), round(x * 1000, 1)])
+                xs.append(x)
+                ys.append(y)
+            if len(pts) < 100:
+                continue
+            out.append({
+                "kind": "face",
+                "label": "FACE — SCANNING",
+                "detail": f"{len(pts)} nodes mapped",
+                "box": _box_from(xs, ys),
+                "mesh": pts,
+                "source": "local",
+                "known": False,
             })
         return out
 
@@ -271,7 +337,9 @@ def main() -> int:
             pass
         return 3
 
-    _send({"ready": True})
+    # The tesselation is static (~2556 edges): send it once at startup instead
+    # of re-serialising it on every single frame.
+    _send({"ready": True, "face_edges": engine.face_edges})
     _log("ready")
 
     while True:

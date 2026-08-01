@@ -1582,12 +1582,22 @@ class JarvisLive:
             return
 
         # Face detection + identity, also fully local and per-frame.
+        # The pose worker already returns 478-point face meshes when its model
+        # is available; those are richer (they carry the wireframe), so they
+        # win. face_id then only has to answer "who is this?".
+        mesh_faces = [d for d in people if d.get("kind") == "face"]
+        people = [d for d in people if d.get("kind") != "face"]
         faces = []
         try:
-            from actions.face_id import detect_faces
-            faces = await asyncio.wait_for(
-                asyncio.to_thread(detect_faces, frame), timeout=5.0
-            )
+            from actions.face_id import detect_faces, identify_box
+            if mesh_faces:
+                faces = mesh_faces
+                # attach identities to the meshes we already have
+                await asyncio.to_thread(identify_box, frame, faces)
+            else:
+                faces = await asyncio.wait_for(
+                    asyncio.to_thread(detect_faces, frame), timeout=5.0
+                )
         except asyncio.TimeoutError:
             pass
         except BaseException as e:

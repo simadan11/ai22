@@ -234,6 +234,13 @@
       opacity: 0.28; filter: blur(4px);
       animation: fx-breathe 1.6s ease-in-out infinite;
     }
+    .fx-mesh {
+      fill: none; stroke: #00d4ff; stroke-width: 0.6; opacity: 0.55;
+      filter: drop-shadow(0 0 2px rgba(0,212,255,0.8));
+      animation: fx-breathe 1.6s ease-in-out infinite;
+    }
+    .fx-mesh-k { stroke: #00ffa8; filter: drop-shadow(0 0 2px rgba(0,255,168,0.8)); }
+    .fx-node { fill: #ffffff; opacity: 0.85; }
     .fx-bone {
       stroke: #ff2d3d; stroke-width: 2.4; stroke-linecap: round; fill: none;
       filter: drop-shadow(0 0 4px rgba(255,45,61,0.9));
@@ -1109,6 +1116,49 @@
       };
     }
 
+    // Biometric face mask — node cloud + tesselation, drawn as one SVG path
+    function _drawFaceMesh(d, geom) {
+      const mesh = d.mesh;
+      if (!Array.isArray(mesh) || mesh.length < 100) return;
+      const { dw, dh, offX, offY, mirror } = geom;
+      const NS = 'http://www.w3.org/2000/svg';
+      const svg = document.createElementNS(NS, 'svg');
+      svg.setAttribute('class', 'fx-g');
+      const pts = mesh.map(q => {
+        let ny = +q[0], nx = +q[1];
+        if (!isFinite(ny) || !isFinite(nx)) return null;
+        if (mirror) nx = 1000 - nx;
+        return [(nx / 1000) * dw - offX, (ny / 1000) * dh - offY];
+      });
+      if (pts.some(p => !p)) return;
+      const known = !!d.known;
+
+      // one <path> for the whole tesselation keeps the DOM tiny and fast
+      const edges = d.mesh_edges || [];
+      if (edges.length) {
+        let dAttr = '';
+        for (const e of edges) {
+          const a = pts[e[0]], b = pts[e[1]];
+          if (!a || !b) continue;
+          dAttr += `M${a[0].toFixed(1)} ${a[1].toFixed(1)}L${b[0].toFixed(1)} ${b[1].toFixed(1)}`;
+        }
+        const wire = document.createElementNS(NS, 'path');
+        wire.setAttribute('d', dAttr);
+        wire.setAttribute('class', known ? 'fx-mesh fx-mesh-k' : 'fx-mesh');
+        svg.appendChild(wire);
+      }
+      // node dots
+      let nodes = '';
+      for (const p of pts) {
+        nodes += `M${(p[0] - 0.9).toFixed(1)} ${p[1].toFixed(1)}a.9.9 0 1 0 1.8 0a.9.9 0 1 0-1.8 0`;
+      }
+      const nd = document.createElementNS(NS, 'path');
+      nd.setAttribute('d', nodes);
+      nd.setAttribute('class', 'fx-node');
+      svg.appendChild(nd);
+      camFx.appendChild(svg);
+    }
+
     function _drawPersonFx(d, geom, x, y, w, h) {
       const { dw, dh, offX, offY, mirror } = geom;
       const NS = 'http://www.w3.org/2000/svg';
@@ -1224,6 +1274,9 @@
           el.appendChild(det);
         }
         camBoxes.appendChild(el);
+        if (d.kind === 'face' && Array.isArray(d.mesh)) {
+          _drawFaceMesh(d, { dw, dh, offX, offY, mirror });
+        }
         if (d.kind === 'person') {
           const px = ((xmin / 1000) * dw - offX);
           const py = ((ymin / 1000) * dh - offY);

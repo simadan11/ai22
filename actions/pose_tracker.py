@@ -66,6 +66,40 @@ def _model_path() -> Path:
     return base / "pose_landmarker_lite.task"
 
 
+_FACE_MODEL_URLS = (
+    "https://storage.googleapis.com/mediapipe-models/face_landmarker/"
+    "face_landmarker/float16/latest/face_landmarker.task",
+    "https://storage.googleapis.com/mediapipe-models/face_landmarker/"
+    "face_landmarker/float16/1/face_landmarker.task",
+)
+
+
+def _ensure_face_model() -> Path | None:
+    """Fetch the 478-point face-mesh model (optional, enables the mask FX)."""
+    p = _model_path().parent / "face_landmarker.task"
+    if p.exists() and p.stat().st_size > 1000:
+        return p
+    for url in _FACE_MODEL_URLS:
+        tmp = p.with_suffix(".part")
+        try:
+            print("[PoseTracker] Downloading face-mesh model (one time)…")
+            with urllib.request.urlopen(url, timeout=20) as r:   # noqa: S310
+                data = r.read()
+            if len(data) > 1000:
+                tmp.write_bytes(data)
+                tmp.replace(p)
+                print("[PoseTracker] Face-mesh model ready")
+                return p
+        except Exception as e:
+            print(f"[PoseTracker] Face-mesh model unavailable ({e})")
+        finally:
+            try:
+                tmp.unlink(missing_ok=True)
+            except Exception:
+                pass
+    return None
+
+
 def _ensure_model() -> Path | None:
     """Return the local model file, downloading it once if needed.
 
@@ -117,6 +151,7 @@ class PoseTracker:
         self._smooth: dict = {}    # exponential smoothing state
         self._fails = 0            # consecutive backend failures
         self._proc = None          # isolated MediaPipe worker process
+        self._face_edges: list = []  # static face-mesh topology (sent once)
         self._restarts = 0         # worker crashes this session (never
                                    # cleared by a lucky frame — a flaky
                                    # backend must degrade, not oscillate)
@@ -277,6 +312,7 @@ class PoseTracker:
         model = _ensure_model()
         if model is None:
             return False
+        _ensure_face_model()      # optional: enables the face-mesh overlay
         worker = Path(__file__).resolve().parent / "pose_worker.py"
         if not worker.exists():
             return False
@@ -298,6 +334,8 @@ class PoseTracker:
             return False
 
         ready = self._recv(timeout=90.0)        # first run may download nothing
+        if ready and ready.get("face_edges"):
+            self._face_edges = ready["face_edges"]
         if not ready or not ready.get("ready"):
             self._kill_worker()
             self._last_err = f"worker init: {(ready or {}).get('fatal', 'no reply')}"
@@ -415,6 +453,12 @@ class PoseTracker:
         out = []
         for i, d in enumerate(dets):
             if not isinstance(d, dict):
+                continue
+            if d.get("kind") == "face":
+                # re-attach the topology the worker sent us once at startup
+                if self._face_edges:
+                    d["mesh_edges"] = self._face_edges
+                out.append(d)
                 continue
             pose = d.get("pose") or {}
             outline = d.get("outline") or []

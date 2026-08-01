@@ -2391,12 +2391,88 @@ class MainWindow(QMainWindow):
     _FACE_KNOWN   = QColor("#00ffa8")     # recognised → green lock
     _FACE_UNKNOWN = QColor("#00d4ff")     # detected but not enrolled → cyan
 
+    def _draw_face_mesh(self, p: QPainter, d: dict, sw: int, sh: int,
+                        col: QColor, pulse: float) -> bool:
+        """Wireframe face mask: node cloud + tesselation, like a biometric scan.
+
+        Returns True when a mesh was actually drawn.
+        """
+        mesh = d.get("mesh")
+        if not isinstance(mesh, (list, tuple)) or len(mesh) < 100:
+            return False
+
+        # normalised [y, x] → screen points (cached: the point cloud only
+        # changes when a new frame arrives, but we repaint at 60 Hz)
+        key = (id(d), sw, sh, len(mesh))
+        cached = getattr(self, "_mesh_cache", None)
+        if cached is not None and cached[0] == key:
+            pts = cached[1]
+        else:
+            pts = []
+            for q in mesh:
+                try:
+                    yy, xx = float(q[0]), float(q[1])
+                except (TypeError, ValueError, IndexError):
+                    return False
+                if yy != yy or xx != xx:
+                    return False
+                pts.append(QPointF(xx / 1000.0 * sw, yy / 1000.0 * sh))
+            self._mesh_cache = (key, pts)
+
+        edges = d.get("mesh_edges") or []
+        n = len(pts)
+
+        # ── 1) wire tesselation ────────────────────────────────────────────
+        if edges:
+            wire = QColor(col)
+            wire.setAlpha(int(70 + 40 * pulse))
+            p.setPen(QPen(wire, 0.7))
+            p.setBrush(Qt.BrushStyle.NoBrush)
+            p.setRenderHint(QPainter.RenderHint.Antialiasing, False)
+            for e in edges:
+                try:
+                    a, b = int(e[0]), int(e[1])
+                except (TypeError, ValueError, IndexError):
+                    continue
+                if 0 <= a < n and 0 <= b < n:
+                    p.drawLine(pts[a], pts[b])
+            p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+
+        # ── 2) node cloud — the "measured points" of the face print ────────
+        node = QColor("#ffffff")
+        node.setAlpha(int(170 + 85 * pulse))
+        p.setPen(Qt.PenStyle.NoPen)
+        p.setBrush(QBrush(node))
+        p.setRenderHint(QPainter.RenderHint.Antialiasing, False)
+        for q in pts:
+            p.drawEllipse(q, 1.1, 1.1)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        p.setBrush(Qt.BrushStyle.NoBrush)
+
+        # ── 3) scan line sweeping across the mesh (biometric read-out) ─────
+        ys = [q.y() for q in pts]
+        xs = [q.x() for q in pts]
+        top, bot = min(ys), max(ys)
+        lft, rgt = min(xs), max(xs)
+        sy = top + (bot - top) * (self._person_phase() % 1.0)
+        grad = QLinearGradient(lft, sy, rgt, sy)
+        c0 = QColor(col); c0.setAlpha(0)
+        c1 = QColor("#ffffff"); c1.setAlpha(200)
+        grad.setColorAt(0.0, c0); grad.setColorAt(0.5, c1); grad.setColorAt(1.0, c0)
+        p.setPen(QPen(QBrush(grad), 1.6))
+        p.drawLine(QPointF(lft, sy), QPointF(rgt, sy))
+        return True
+
     def _draw_face_fx(self, p: QPainter, d: dict,
-                      x: int, y: int, bw: int, bh: int) -> None:
-        """Targeting reticle around a detected face."""
+                      x: int, y: int, bw: int, bh: int,
+                      sw: int = 0, sh: int = 0) -> None:
+        """Targeting reticle + biometric wireframe mask over a detected face."""
         known = bool(d.get("known"))
         col   = self._FACE_KNOWN if known else self._FACE_UNKNOWN
         pulse = 0.5 + 0.5 * math.sin(self._person_phase() * 2 * math.pi)
+
+        if sw and sh:
+            self._draw_face_mesh(p, d, sw, sh, col, pulse)
 
         p.setBrush(Qt.BrushStyle.NoBrush)
         # soft halo
@@ -2429,7 +2505,7 @@ class MainWindow(QMainWindow):
 
         # a recognised identity gets a pulsing lock ring
         if known:
-            r = max(bw, bh) * (0.62 + 0.05 * pulse)
+            r = max(bw, bh) * (0.50 + 0.03 * pulse)
             ring = QColor(col); ring.setAlpha(int(90 + 80 * pulse))
             p.setPen(QPen(ring, 1.6))
             p.drawEllipse(QPointF(cx, cy), r, r)
@@ -2494,7 +2570,7 @@ class MainWindow(QMainWindow):
 
                 if kind == "face":
                     try:
-                        self._draw_face_fx(p, d, x, y, bw, bh)
+                        self._draw_face_fx(p, d, x, y, bw, bh, sw, sh)
                     except Exception:
                         p.setPen(QPen(col, 2))
                         p.setBrush(Qt.BrushStyle.NoBrush)

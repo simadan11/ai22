@@ -380,6 +380,47 @@ def get_engine() -> FaceEngine:
     return _engine
 
 
+def identify_box(frame_bytes: bytes, faces: list[dict]) -> None:
+    """Fill in identities for face detections that already have boxes/meshes.
+
+    Used when the MediaPipe worker supplied the 478-point mesh: we only need
+    to answer *who* it is, not where the face is. Mutates `faces` in place.
+    """
+    eng = get_engine()
+    eng._ensure()
+    cv2, np = eng._cv2, eng._np
+    if cv2 is None or eng._recognizer is None or not faces:
+        return
+    try:
+        bgr = cv2.imdecode(np.frombuffer(frame_bytes, np.uint8), cv2.IMREAD_COLOR)
+        if bgr is None or bgr.size == 0:
+            return
+        H, W = bgr.shape[:2]
+        gray = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
+        for f in faces:
+            box = f.get("box")
+            if not (isinstance(box, (list, tuple)) and len(box) == 4):
+                continue
+            y0, x0, y1, x1 = box
+            x = int(x0 / 1000 * W)
+            y = int(y0 / 1000 * H)
+            w = max(1, int((x1 - x0) / 1000 * W))
+            h = max(1, int((y1 - y0) / 1000 * H))
+            name, score = eng._identify(gray, x, y, w, h)
+            if name:
+                f["label"] = f"FACE — {name}"
+                f["detail"] = f"match {score:.0f}% · {len(f.get('mesh') or [])} nodes"
+                f["known"] = True
+            else:
+                nodes = len(f.get("mesh") or [])
+                f["label"] = "FACE — UNKNOWN"
+                f["detail"] = (f"{nodes} nodes mapped · not enrolled"
+                               if nodes else "not enrolled")
+                f["known"] = False
+    except Exception as e:
+        print(f"[FaceID] identify_box failed: {e}")
+
+
 def detect_faces(frame_bytes: bytes) -> list[dict]:
     """Convenience wrapper — face detections for one JPEG frame."""
     return get_engine().detect(frame_bytes)
