@@ -191,13 +191,25 @@ class FaceEngine:
             person_dir.mkdir(parents=True, exist_ok=True)
             gray = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
             stamp = int(time.time() * 1000)
+            try:
+                from actions.face_db import get_db
+                db = get_db()
+            except Exception:
+                db = None
             saved = 0
-            for i, (x, y, w, h) in enumerate(boxes[:3]):
+            # biggest face first — that is the person in front of the camera
+            for i, (x, y, w, h) in enumerate(
+                    sorted(boxes, key=lambda b: b[2] * b[3], reverse=True)[:2]):
                 crop = gray[max(0, y):y + h, max(0, x):x + w]
                 if crop.size == 0:
                     continue
-                crop = cv2.resize(crop, (160, 160))
-                cv2.imwrite(str(person_dir / f"{stamp}_{i}.jpg"), crop)
+                cv2.imwrite(str(person_dir / f"{stamp}_{i}.jpg"),
+                            cv2.resize(crop, (160, 160)))
+                # store the face print in the vector database
+                if db is not None:
+                    vec = db.encode(bgr, box=(x, y, w, h))
+                    if vec:
+                        db.add(name.strip(), vec)
                 saved += 1
             if saved:
                 self.reload()
@@ -313,10 +325,23 @@ class FaceEngine:
                 return []
 
             gray = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
+            try:
+                from actions.face_db import get_db
+                db = get_db()
+            except Exception:
+                db = None
             out = []
             for (x, y, w, h) in sorted(
                     boxes, key=lambda b: b[2] * b[3], reverse=True)[:max_faces]:
-                name, score = self._identify(gray, x, y, w, h)
+                name, score = None, 0.0
+                if db is not None:
+                    vec = db.encode(bgr, box=(x, y, w, h))
+                    if vec:
+                        n2, sim = db.search(vec)
+                        if n2:
+                            name, score = n2, sim * 100.0
+                if not name:
+                    name, score = self._identify(gray, x, y, w, h)
                 label = f"FACE — {name}" if name else "FACE — UNKNOWN"
                 det = {
                     "kind": "face",
@@ -380,6 +405,27 @@ def get_engine() -> FaceEngine:
     return _engine
 
 
+def _mesh_landmarks_px(f: dict, W: int, H: int):
+    """Face-mesh points (0-1000 [y,x]) → pixel [y,x] list, or None."""
+    mesh = f.get("mesh")
+    if not isinstance(mesh, (list, tuple)) or len(mesh) < 68:
+        return None
+    try:
+        return [[float(q[0]) / 1000 * H, float(q[1]) / 1000 * W] for q in mesh]
+    except (TypeError, ValueError, IndexError):
+        return None
+
+
+def _sface_landmarks(pts_px):
+    """Dense mesh → the 5 points SFace expects, as [x, y] pairs."""
+    # MediaPipe canonical indices: right eye, left eye, nose, mouth corners
+    idx = (33, 263, 1, 61, 291)
+    try:
+        return [[pts_px[i][1], pts_px[i][0]] for i in idx]
+    except (IndexError, TypeError):
+        return None
+
+
 def identify_box(frame_bytes: bytes, faces: list[dict]) -> None:
     """Fill in identities for face detections that already have boxes/meshes.
 
@@ -389,8 +435,13 @@ def identify_box(frame_bytes: bytes, faces: list[dict]) -> None:
     eng = get_engine()
     eng._ensure()
     cv2, np = eng._cv2, eng._np
-    if cv2 is None or eng._recognizer is None or not faces:
+    if cv2 is None or not faces:
         return
+    try:
+        from actions.face_db import get_db
+        db = get_db()
+    except Exception:
+        db = None
     try:
         bgr = cv2.imdecode(np.frombuffer(frame_bytes, np.uint8), cv2.IMREAD_COLOR)
         if bgr is None or bgr.size == 0:
@@ -406,19 +457,127 @@ def identify_box(frame_bytes: bytes, faces: list[dict]) -> None:
             y = int(y0 / 1000 * H)
             w = max(1, int((x1 - x0) / 1000 * W))
             h = max(1, int((y1 - y0) / 1000 * H))
-            name, score = eng._identify(gray, x, y, w, h)
+            nodes = len(f.get("mesh") or [])
+
+            name, score, how = None, 0.0, ""
+            # 1) vector search over face prints — the accurate path
+            if db is not None:
+                pts_px = _mesh_landmarks_px(f, W, H)
+                vec = db.encode(bgr, box=(x, y, w, h),
+                                landmarks=(_sface_landmarks(pts_px)
+                                           if pts_px and db.encoder == "sface"
+                                           else pts_px))
+                if vec:
+                    name, sim = db.search(vec)
+                    if name:
+                        score, how = sim * 100.0, "vector"
+            # 2) legacy LBPH as a safety net
+            if not name and eng._recognizer is not None:
+                name, score = eng._identify(gray, x, y, w, h)
+                how = "lbph" if name else ""
+
             if name:
                 f["label"] = f"FACE — {name}"
-                f["detail"] = f"match {score:.0f}% · {len(f.get('mesh') or [])} nodes"
+                f["detail"] = (f"match {score:.0f}%"
+                               + (f" · {nodes} nodes" if nodes else "")
+                               + (f" · {how}" if how else ""))
                 f["known"] = True
+                f["person_name"] = name
             else:
-                nodes = len(f.get("mesh") or [])
                 f["label"] = "FACE — UNKNOWN"
                 f["detail"] = (f"{nodes} nodes mapped · not enrolled"
                                if nodes else "not enrolled")
                 f["known"] = False
     except Exception as e:
         print(f"[FaceID] identify_box failed: {e}")
+
+
+def enroll_with_mesh(frame_bytes: bytes, name: str, faces: list[dict]) -> bool:
+    """Enrol using face meshes we already computed for this frame.
+
+    Preferred over `enroll()` while the live HUD is running: the 478-point
+    mesh gives SFace properly aligned landmarks, which makes the stored face
+    print much more reliable.
+    """
+    name = (name or "").strip()
+    if not name or not faces:
+        return False
+    eng = get_engine()
+    eng._ensure()
+    cv2, np = eng._cv2, eng._np
+    if cv2 is None:
+        return False
+    try:
+        from actions.face_db import get_db
+        db = get_db()
+        bgr = cv2.imdecode(np.frombuffer(frame_bytes, np.uint8), cv2.IMREAD_COLOR)
+        if bgr is None or bgr.size == 0:
+            return False
+        H, W = bgr.shape[:2]
+        # the largest face is the one being enrolled
+        def area(f):
+            b = f.get("box") or [0, 0, 0, 0]
+            return (b[2] - b[0]) * (b[3] - b[1])
+        f = max(faces, key=area)
+        b = f.get("box")
+        if not (isinstance(b, (list, tuple)) and len(b) == 4):
+            return False
+        y0, x0, y1, x1 = b
+        x = int(x0 / 1000 * W)
+        y = int(y0 / 1000 * H)
+        w = max(1, int((x1 - x0) / 1000 * W))
+        h = max(1, int((y1 - y0) / 1000 * H))
+        pts_px = _mesh_landmarks_px(f, W, H)
+        vec = db.encode(bgr, box=(x, y, w, h),
+                        landmarks=(_sface_landmarks(pts_px)
+                                   if pts_px and db.encoder == "sface"
+                                   else pts_px))
+        if not vec:
+            return False
+        ok = db.add(name, vec)
+        if ok:
+            # keep a thumbnail too, so the LBPH net still has something
+            try:
+                gray = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
+                crop = gray[max(0, y):y + h, max(0, x):x + w]
+                if crop.size:
+                    d = _FACES_DIR / name
+                    d.mkdir(parents=True, exist_ok=True)
+                    cv2.imwrite(str(d / f"{int(time.time()*1000)}.jpg"),
+                                cv2.resize(crop, (160, 160)))
+            except Exception:
+                pass
+        return ok
+    except Exception as e:
+        print(f"[FaceID] enroll_with_mesh failed: {e}")
+        return False
+
+
+def known_people() -> list[str]:
+    """Everyone currently enrolled in the vector database."""
+    try:
+        from actions.face_db import get_db
+        return get_db().names()
+    except Exception:
+        return get_engine().known_names
+
+
+def forget_person(name: str) -> int:
+    """Remove a person from the face database."""
+    try:
+        from actions.face_db import get_db
+        n = get_db().forget(name)
+    except Exception:
+        n = 0
+    try:
+        import shutil
+        d = _FACES_DIR / (name or "").strip()
+        if d.is_dir():
+            shutil.rmtree(d, ignore_errors=True)
+        get_engine().reload()
+    except Exception:
+        pass
+    return n
 
 
 def detect_faces(frame_bytes: bytes) -> list[dict]:

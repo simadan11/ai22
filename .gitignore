@@ -4,3 +4,8 @@ config/faces/
 config/*.onnx
 config/*.task
 config/face_lbph.yml
+config/faces.db
+config/faces.db.lock
+config/faces_vectors.json
+.milvus_demo/
+*.db.lock

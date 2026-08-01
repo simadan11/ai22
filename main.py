@@ -240,6 +240,37 @@ TOOL_DECLARATIONS = [
         }
     },
     {
+        "name": "who_is_this",
+        "description": (
+            "Says who the person in front of the camera is, using the face "
+            "database. Call when the user asks: who is this, who am I, "
+            "do you know me, кто это, ты меня узнаёшь, как меня зовут."
+        ),
+        "parameters": {"type": "OBJECT", "properties": {}, "required": []}
+    },
+    {
+        "name": "list_faces",
+        "description": (
+            "Lists every person stored in the face database. Call when asked: "
+            "who do you know, list faces, кого ты знаешь, список лиц."
+        ),
+        "parameters": {"type": "OBJECT", "properties": {}, "required": []}
+    },
+    {
+        "name": "forget_face",
+        "description": (
+            "Deletes a person from the face database. Call when asked: forget "
+            "<name>, delete my face, забудь <имя>, удали моё лицо."
+        ),
+        "parameters": {
+            "type": "OBJECT",
+            "properties": {
+                "name": {"type": "STRING", "description": "Person to remove"}
+            },
+            "required": ["name"]
+        }
+    },
+    {
         "name": "close_camera",
         "description": (
             "Closes the live camera view shown on screen. "
@@ -580,6 +611,7 @@ class JarvisLive:
         self._speaking_lock       = threading.Lock()
         self._phone_active        = False   # True while phone mic is streaming; pauses PC mic
         self._last_frame: bytes | None = None   # newest live camera frame
+        self._last_faces: list = []             # newest face meshes for it
         self._pending_vision       = None    # (img_bytes, mime_type, question, angle) to inject after tool response
         self._vision_cam_active    = False   # True if camera was opened for vision → auto-close after response
         self._vision_close_pending = False   # True after vision injected; next turn_complete closes camera
@@ -814,17 +846,62 @@ class JarvisLive:
                     result = ("No live camera frame available. Start the phone "
                               "camera first, then ask me again.")
                 else:
-                    from actions.face_id import enroll as _enroll
-                    ok = await loop.run_in_executor(
-                        None, lambda: _enroll(frame, who)
+                    from actions.face_id import (
+                        enroll as _enroll, enroll_with_mesh as _enroll_mesh,
                     )
-                    if ok:
-                        self.ui.write_log(f"SYS: Face enrolled — {who}")
-                        result = (f"Saved. I will recognise {who} from now on. "
-                                  f"Show the face from a few angles to improve it.")
+                    faces_now = list(getattr(self, "_last_faces", []) or [])
+                    if faces_now:
+                        ok = await loop.run_in_executor(
+                            None, lambda: _enroll_mesh(frame, who, faces_now)
+                        )
                     else:
-                        result = ("I could not find a clear face in the frame. "
-                                  "Move closer to the camera and try again.")
+                        ok = await loop.run_in_executor(
+                            None, lambda: _enroll(frame, who)
+                        )
+                    if ok:
+                        self.ui.write_log(f"SYS: Face print stored — {who}")
+                        result = (f"Face print saved for {who}. I will recognise "
+                                  f"them from now on. Say it again from a "
+                                  f"different angle to make it more reliable.")
+                    else:
+                        result = ("I could not read a clear face. Move closer, "
+                                  "face the camera and try again.")
+
+            elif name == "who_is_this":
+                faces_now = list(getattr(self, "_last_faces", []) or [])
+                named = [f.get("person_name") for f in faces_now
+                         if f.get("known") and f.get("person_name")]
+                if named:
+                    result = ("I recognise " + ", ".join(dict.fromkeys(named))
+                              + " in front of the camera.")
+                elif faces_now:
+                    from actions.face_id import known_people
+                    kn = known_people()
+                    result = ("I can see a face but it is not in my database. "
+                              + (f"I currently know: {', '.join(kn)}. "
+                                 if kn else "My face database is empty. ")
+                              + "Say 'remember this face, this is <name>' to add them.")
+                else:
+                    result = ("I do not see a face right now. Start the phone "
+                              "camera and point it at someone.")
+
+            elif name == "forget_face":
+                who = (args.get("name") or "").strip()
+                if not who:
+                    result = "Tell me whose face I should forget."
+                else:
+                    from actions.face_id import forget_person
+                    n = await loop.run_in_executor(
+                        None, lambda: forget_person(who)
+                    )
+                    result = (f"Deleted {n} face print(s) for {who}."
+                              if n else f"I had nothing stored for {who}.")
+
+            elif name == "list_faces":
+                from actions.face_id import known_people
+                kn = known_people()
+                result = ("I know these people: " + ", ".join(kn)
+                          if kn else "My face database is empty so far.")
 
             elif name == "close_camera":
                 self.ui.stop_camera_stream()
@@ -1628,6 +1705,7 @@ class JarvisLive:
                     p["label"] = f["label"].replace("FACE — ", "PERSON — ")
                     p["detail"] = f["detail"]
                     break
+        self._last_faces = faces
         dets = people + faces + extras
         try:
             self.ui.show_phone_cam_dets(dets)
