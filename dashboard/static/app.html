@@ -198,6 +198,11 @@
     .tag-info:active { transform: scale(0.98); }
     @keyframes tag-pop { from { opacity: 0; transform: scale(1.15); } }
     .tag-p { border-color: #f97316; box-shadow: 0 0 12px rgba(249,115,22,0.35); }
+    .tag-f { border-color: #00d4ff; box-shadow: 0 0 14px rgba(0,212,255,0.45); }
+    .tag-f .tag-l { background: #00d4ff; }
+    .tag-fk { border-color: #00ffa8; box-shadow: 0 0 16px rgba(0,255,168,0.55); }
+    .tag-fk .tag-l { background: #00ffa8; }
+    .tag-fk .tag-d { color: #7dffd0; }
     .tag-v { border-color: #facc15; box-shadow: 0 0 12px rgba(250,204,21,0.35); }
     .tag-v .tag-l { background: #facc15; }
     .tag-v .tag-d { color: #fde68a; }
@@ -214,6 +219,43 @@
       text-shadow: 0 1px 3px #000;
     }
     .tag-p .tag-d { color: #fdba74; }
+    /* ── EDITH person effect: silhouette aura + bone rig ──────────────── */
+    #cam-fx { position: absolute; inset: 0; pointer-events: none; overflow: hidden; }
+    #cam-fx svg { position: absolute; inset: 0; width: 100%; height: 100%; }
+    .fx-aura {
+      fill: rgba(255,165,0,0.13); stroke: #ffa500; stroke-width: 2.5;
+      stroke-linejoin: round; stroke-linecap: round;
+      filter: drop-shadow(0 0 6px rgba(255,165,0,0.95))
+              drop-shadow(0 0 16px rgba(255,140,0,0.55));
+      animation: fx-breathe 1.6s ease-in-out infinite;
+    }
+    .fx-aura-glow {
+      fill: none; stroke: #ff8c00; stroke-width: 9; stroke-linejoin: round;
+      opacity: 0.28; filter: blur(4px);
+      animation: fx-breathe 1.6s ease-in-out infinite;
+    }
+    .fx-mesh {
+      fill: none; stroke: #00d4ff; stroke-width: 0.6; opacity: 0.55;
+      filter: drop-shadow(0 0 2px rgba(0,212,255,0.8));
+      animation: fx-breathe 1.6s ease-in-out infinite;
+    }
+    .fx-mesh-k { stroke: #00ffa8; filter: drop-shadow(0 0 2px rgba(0,255,168,0.8)); }
+    .fx-node { fill: #ffffff; opacity: 0.85; }
+    .fx-bone {
+      stroke: #ff2d3d; stroke-width: 2.4; stroke-linecap: round; fill: none;
+      filter: drop-shadow(0 0 4px rgba(255,45,61,0.9));
+    }
+    .fx-joint { fill: #fff0f0; stroke: #ff2d3d; stroke-width: 1.4; }
+    .fx-sweep {
+      stroke: #fff2cc; stroke-width: 2; opacity: 0.85;
+      filter: drop-shadow(0 0 6px rgba(255,220,150,0.9));
+      animation: fx-sweep 2.2s linear infinite;
+    }
+    @keyframes fx-breathe { 0%,100% { opacity: 0.75; } 50% { opacity: 1; } }
+    @keyframes fx-sweep   { 0% { transform: translateY(0); } 100% { transform: translateY(var(--fxh, 100px)); } }
+    @keyframes fx-in      { from { opacity: 0; } to { opacity: 1; } }
+    .fx-g { animation: fx-in .3s ease; }
+
     .cam-scanline {
       position: absolute; left: 0; right: 0; height: 90px; pointer-events: none;
       background: linear-gradient(to bottom, transparent, rgba(34,211,238,0.10), transparent);
@@ -331,6 +373,7 @@
   <!-- ── EDITH camera overlay ─────────────────────────────────────────── -->
   <div id="cam-overlay">
     <video id="cam-video" autoplay playsinline muted></video>
+    <div id="cam-fx"></div>
     <div id="cam-boxes"></div>
     <div class="cam-scanline"></div>
     <span class="cf cf-tl"></span><span class="cf cf-tr"></span>
@@ -876,6 +919,7 @@
     const camOverlay = document.getElementById('cam-overlay');
     const camVideo   = document.getElementById('cam-video');
     const camBoxes   = document.getElementById('cam-boxes');
+    const camFx      = document.getElementById('cam-fx');
     const camStatus  = document.getElementById('cam-status');
     const camTargets = document.getElementById('cam-targets');
     const camLogEl   = document.getElementById('cam-log');
@@ -924,14 +968,14 @@
       _stopCamStream();
       camVideo.srcObject = null;
       _lastDets = [];
-      camBoxes.innerHTML = '';
+      camBoxes.innerHTML = ''; camFx.innerHTML = '';
       camTargets.textContent = 'NO TARGETS';
     }
 
     async function flipCamera() {
       stopLive();
       _facing = (_facing === 'environment') ? 'user' : 'environment';
-      _lastDets = []; camBoxes.innerHTML = '';
+      _lastDets = []; camBoxes.innerHTML = ''; camFx.innerHTML = '';
       if (camOverlay.classList.contains('open')) await _startCamStream();
     }
 
@@ -954,7 +998,7 @@
     }
 
     // ── LIVE — stream the phone camera onto the PC HUD ──────────────────────
-    let _liveWs = null, _liveTimer = null;
+    let _liveWs = null, _liveTimer = null, _liveRaf = null;
 
     function toggleLive() {
       if (_liveWs || _liveTimer) { stopLive(); return; }
@@ -970,13 +1014,23 @@
         btn.classList.add('on'); btn.textContent = '⏹';
         camStatus.textContent = 'STREAMING TO PC — LIVE';
         toast('📡 Live on PC');
-        // ~3 fps of small JPEGs is plenty for a LAN preview and keeps
-        // bandwidth light for the detection pass that runs alongside
-        _liveTimer = setInterval(() => {
-          if (ws.readyState !== 1) return;
-          const f = _grabFrame(560, 0.55);
+        // Target 60 FPS. Driven by requestAnimationFrame (which is already
+        // vsync-aligned) instead of a fixed timer, and back-pressured on
+        // ws.bufferedAmount so a slow link drops frames rather than piling
+        // up latency.
+        const FRAME_MS = 1000 / 60;
+        let _lastSend = 0;
+        const pump = (now) => {
+          if (!_liveWs || ws.readyState !== 1) return;
+          _liveRaf = requestAnimationFrame(pump);
+          if (now - _lastSend < FRAME_MS) return;
+          // skip while the socket is still draining the previous frames
+          if (ws.bufferedAmount > 512 * 1024) return;
+          _lastSend = now;
+          const f = _grabFrame(640, 0.5);
           if (f) ws.send(_b64ToBytes(f));
-        }, 320);
+        };
+        _liveRaf = requestAnimationFrame(pump);
       };
       ws.onclose = () => stopLive();
       ws.onerror = () => stopLive();
@@ -984,6 +1038,7 @@
 
     function stopLive() {
       if (_liveTimer) { clearInterval(_liveTimer); _liveTimer = null; }
+      if (_liveRaf) { cancelAnimationFrame(_liveRaf); _liveRaf = null; }
       if (_liveWs) {
         const w = _liveWs; _liveWs = null;
         if (w.readyState < 2) w.close();
@@ -1003,7 +1058,7 @@
       btn.disabled = true; btn.style.opacity = '0.45'; btn.textContent = '···';
       const qInp = document.getElementById('cam-q');
       const question = qInp.value.trim();
-      _lastDets = []; camBoxes.innerHTML = '';
+      _lastDets = []; camBoxes.innerHTML = ''; camFx.innerHTML = '';
       camStatus.textContent  = 'SCANNING — ANALYZING FEED…';
       camTargets.textContent = 'PROCESSING…';
       const headers = Object.assign({ 'Content-Type': 'application/json' }, _authHeader());
@@ -1036,8 +1091,143 @@
       if (e.key === 'Enter') { e.preventDefault(); doScan(); }
     });
 
+    // ── EDITH person effect: silhouette aura + skeleton ─────────────────────
+    const _BONES = [
+      ['head','neck'],['neck','l_shoulder'],['neck','r_shoulder'],
+      ['l_shoulder','l_elbow'],['l_elbow','l_wrist'],
+      ['r_shoulder','r_elbow'],['r_elbow','r_wrist'],
+      ['neck','pelvis'],['l_shoulder','l_hip'],['r_shoulder','r_hip'],
+      ['pelvis','l_hip'],['pelvis','r_hip'],['l_hip','r_hip'],
+      ['l_hip','l_knee'],['l_knee','l_ankle'],
+      ['r_hip','r_knee'],['r_knee','r_ankle'],
+    ];
+
+    function _fallbackRig(x, y, w, h) {
+      const P = (fx, fy) => [x + w * fx, y + h * fy];
+      return {
+        head: P(.50,.07), neck: P(.50,.17),
+        l_shoulder: P(.31,.21), r_shoulder: P(.69,.21),
+        l_elbow: P(.22,.39),    r_elbow: P(.78,.39),
+        l_wrist: P(.19,.56),    r_wrist: P(.81,.56),
+        pelvis: P(.50,.53),
+        l_hip: P(.38,.55),      r_hip: P(.62,.55),
+        l_knee: P(.37,.75),     r_knee: P(.63,.75),
+        l_ankle: P(.36,.96),    r_ankle: P(.64,.96),
+      };
+    }
+
+    // Biometric face mask — node cloud + tesselation, drawn as one SVG path
+    function _drawFaceMesh(d, geom) {
+      const mesh = d.mesh;
+      if (!Array.isArray(mesh) || mesh.length < 100) return;
+      const { dw, dh, offX, offY, mirror } = geom;
+      const NS = 'http://www.w3.org/2000/svg';
+      const svg = document.createElementNS(NS, 'svg');
+      svg.setAttribute('class', 'fx-g');
+      const pts = mesh.map(q => {
+        let ny = +q[0], nx = +q[1];
+        if (!isFinite(ny) || !isFinite(nx)) return null;
+        if (mirror) nx = 1000 - nx;
+        return [(nx / 1000) * dw - offX, (ny / 1000) * dh - offY];
+      });
+      if (pts.some(p => !p)) return;
+      const known = !!d.known;
+
+      // one <path> for the whole tesselation keeps the DOM tiny and fast
+      const edges = d.mesh_edges || [];
+      if (edges.length) {
+        let dAttr = '';
+        for (const e of edges) {
+          const a = pts[e[0]], b = pts[e[1]];
+          if (!a || !b) continue;
+          dAttr += `M${a[0].toFixed(1)} ${a[1].toFixed(1)}L${b[0].toFixed(1)} ${b[1].toFixed(1)}`;
+        }
+        const wire = document.createElementNS(NS, 'path');
+        wire.setAttribute('d', dAttr);
+        wire.setAttribute('class', known ? 'fx-mesh fx-mesh-k' : 'fx-mesh');
+        svg.appendChild(wire);
+      }
+      // node dots
+      let nodes = '';
+      for (const p of pts) {
+        nodes += `M${(p[0] - 0.9).toFixed(1)} ${p[1].toFixed(1)}a.9.9 0 1 0 1.8 0a.9.9 0 1 0-1.8 0`;
+      }
+      const nd = document.createElementNS(NS, 'path');
+      nd.setAttribute('d', nodes);
+      nd.setAttribute('class', 'fx-node');
+      svg.appendChild(nd);
+      camFx.appendChild(svg);
+    }
+
+    function _drawPersonFx(d, geom, x, y, w, h) {
+      const { dw, dh, offX, offY, mirror } = geom;
+      const NS = 'http://www.w3.org/2000/svg';
+      const svg = document.createElementNS(NS, 'svg');
+      svg.setAttribute('class', 'fx-g');
+      const mk = (t, attrs) => {
+        const e = document.createElementNS(NS, t);
+        for (const k in attrs) e.setAttribute(k, attrs[k]);
+        return e;
+      };
+      // normalized [y,x] (0-1000) → screen px, honouring mirror + object-fit cover
+      const pt = q => {
+        let ny = +q[0], nx = +q[1];
+        if (!isFinite(ny) || !isFinite(nx)) return null;
+        if (mirror) nx = 1000 - nx;
+        return [(nx / 1000) * dw - offX, (ny / 1000) * dh - offY];
+      };
+
+      // 1) silhouette outline (fallback: rounded bounding box)
+      let poly = null;
+      if (Array.isArray(d.outline) && d.outline.length >= 4) {
+        const pts = d.outline.slice(0, 40).map(pt).filter(Boolean);
+        if (pts.length >= 4) poly = pts.map(p => p.join(',')).join(' ');
+      }
+      if (poly) {
+        svg.appendChild(mk('polygon', { points: poly, class: 'fx-aura-glow' }));
+        svg.appendChild(mk('polygon', { points: poly, class: 'fx-aura' }));
+      } else {
+        const r = { x, y, width: w, height: h, rx: 10, ry: 10 };
+        svg.appendChild(mk('rect', { ...r, class: 'fx-aura-glow' }));
+        svg.appendChild(mk('rect', { ...r, class: 'fx-aura' }));
+      }
+
+      // 2) bone rig
+      const joints = {};
+      if (d.pose && typeof d.pose === 'object') {
+        for (const k in d.pose) {
+          const p = pt(d.pose[k]);
+          if (p) joints[k] = p;
+        }
+      }
+      // A box-only detector (HOG) has no joints; a generic rig would draw a
+      // skeleton unrelated to the real body, so skip bones entirely.
+      const rig = Object.keys(joints).length >= 3
+        ? joints
+        : (d.no_skeleton ? {} : _fallbackRig(x, y, w, h));
+      _BONES.forEach(([a, b]) => {
+        if (!rig[a] || !rig[b]) return;
+        svg.appendChild(mk('line', {
+          x1: rig[a][0], y1: rig[a][1], x2: rig[b][0], y2: rig[b][1], class: 'fx-bone',
+        }));
+      });
+      for (const k in rig) {
+        const big = (k === 'head' || k === 'neck' || k === 'pelvis');
+        svg.appendChild(mk('circle', {
+          cx: rig[k][0], cy: rig[k][1], r: big ? 4 : 2.6, class: 'fx-joint',
+        }));
+      }
+
+      // 3) scan line sweeping down the target
+      const sweep = mk('line', { x1: x, y1: y, x2: x + w, y2: y, class: 'fx-sweep' });
+      sweep.style.setProperty('--fxh', h + 'px');
+      svg.appendChild(sweep);
+
+      camFx.appendChild(svg);
+    }
+
     function _drawBoxes() {
-      camBoxes.innerHTML = '';
+      camBoxes.innerHTML = ''; camFx.innerHTML = '';
       const vw = camVideo.videoWidth,  vh = camVideo.videoHeight;
       const cw = camVideo.clientWidth, ch = camVideo.clientHeight;
       if (!vw || !vh || !cw || !ch) return;
@@ -1046,7 +1236,7 @@
       const dw = vw * scale, dh = vh * scale;
       const offX = (dw - cw) / 2, offY = (dh - ch) / 2;
       const mirror = (_facing === 'user');
-      let persons = 0, vehicles = 0, drawn = 0;
+      let persons = 0, vehicles = 0, faces = 0, drawn = 0;
       _lastDets.slice(0, 12).forEach(d => {
         if (!Array.isArray(d.box) || d.box.length !== 4) return;
         let [ymin, xmin, ymax, xmax] = d.box.map(Number);
@@ -1057,11 +1247,15 @@
         if (mirror) { const t = xmin; xmin = 1000 - xmax; xmax = 1000 - t; }
         const el = document.createElement('div');
         el.className = 'tag' +
-          (d.kind === 'person' ? ' tag-p' : d.kind === 'vehicle' ? ' tag-v' : '');
+          (d.kind === 'person' ? ' tag-p'
+           : d.kind === 'vehicle' ? ' tag-v'
+           : d.kind === 'face' ? (d.known ? ' tag-f tag-fk' : ' tag-f')
+           : '');
         // objects, vehicles, landmarks: tap → JARVIS looks it up & explains.
         // people and plates are intentionally NOT searchable.
         const _label = String(d.label || '');
-        if (d.kind !== 'person' && !/^PLATE\b/i.test(_label)) {
+        if (d.kind !== 'person' && d.kind !== 'face'
+            && !/^PLATE\b/i.test(_label)) {
           el.classList.add('tag-info');
           el.addEventListener('click', () => _tagInfo(_label));
         }
@@ -1080,12 +1274,22 @@
           el.appendChild(det);
         }
         camBoxes.appendChild(el);
+        if (d.kind === 'face' && Array.isArray(d.mesh)) {
+          _drawFaceMesh(d, { dw, dh, offX, offY, mirror });
+        }
+        if (d.kind === 'person') {
+          const px = ((xmin / 1000) * dw - offX);
+          const py = ((ymin / 1000) * dh - offY);
+          _drawPersonFx(d, { dw, dh, offX, offY, mirror }, px, py,
+                        ((xmax - xmin) / 1000) * dw, ((ymax - ymin) / 1000) * dh);
+        }
         drawn++;
         if (d.kind === 'person') persons++;
         else if (d.kind === 'vehicle') vehicles++;
+        else if (d.kind === 'face') faces++;
       });
       camTargets.textContent = drawn
-        ? `TARGETS: ${drawn} ▸ ${persons} PERSON · ${vehicles} VEHICLE · ${drawn - persons - vehicles} OBJECT`
+        ? `TARGETS: ${drawn} ▸ ${persons} PERSON · ${faces} FACE · ${vehicles} VEHICLE · ${drawn - persons - vehicles - faces} OBJECT`
         : 'NO TARGETS';
       if (drawn) camStatus.textContent = 'ANALYSIS COMPLETE — ANSWER INCOMING';
     }

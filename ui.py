@@ -456,6 +456,19 @@ class HudCanvas(QWidget):
 
         r_face = fw * 0.31
 
+        # ── solid (never transparent) core disc behind the orb ────────────
+        r_solid = r_face * 1.12 * self._scale
+        disc = QRadialGradient(cx, cy - r_solid * 0.35, r_solid * 1.7)
+        disc.setColorAt(0.0, qcol(C.PANEL2, 255))
+        disc.setColorAt(0.6, qcol(C.DARK, 255))
+        disc.setColorAt(1.0, qcol(C.BG, 255))
+        p.setPen(Qt.PenStyle.NoPen)
+        p.setBrush(QBrush(disc))
+        p.drawEllipse(QRectF(cx - r_solid, cy - r_solid, r_solid * 2, r_solid * 2))
+        p.setBrush(Qt.BrushStyle.NoBrush)
+        p.setPen(QPen(qcol(C.MUTED_C if self.muted else C.PRI, 220), 1.6))
+        p.drawEllipse(QRectF(cx - r_solid, cy - r_solid, r_solid * 2, r_solid * 2))
+
         # halo glow
         for i in range(10):
             r   = r_face * (1.8 - i * 0.08)
@@ -542,8 +555,7 @@ class HudCanvas(QWidget):
             for i in range(8, 0, -1):
                 r2  = int(orb_r * i / 8)
                 frc = i / 8
-                a   = max(0, min(255, int(self._halo * 1.1 * frc)))
-                p.setBrush(QBrush(QColor(int(oc[0]*frc), int(oc[1]*frc), int(oc[2]*frc), a)))
+                p.setBrush(QBrush(QColor(int(oc[0]*frc), int(oc[1]*frc), int(oc[2]*frc), 255)))
                 p.setPen(Qt.PenStyle.NoPen)
                 p.drawEllipse(QRectF(cx - r2, cy - r2, r2 * 2, r2 * 2))
             p.setPen(QPen(qcol(C.PRI, min(255, int(self._halo * 2))), 1))
@@ -595,6 +607,101 @@ class HudCanvas(QWidget):
                 hgt = int(3 + 2 * math.sin(self._tick * 0.09 + i * 0.6))
                 cl  = qcol(C.BORDER_B)
             p.fillRect(QRectF(wx0 + i * bw, wy + 20 - hgt, bw - 1, hgt), cl)
+
+class _GearButton(QWidget):
+    """Floating animated settings button — the only chrome besides the orb."""
+
+    clicked = pyqtSignal()
+    SIZE = 46
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setFixedSize(self.SIZE, self.SIZE)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setToolTip("Settings & Controls")
+        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, False)
+        self._angle   = 0.0
+        self._hover   = 0.0        # 0..1 eased hover amount
+        self._active  = False
+        self._press   = 0.0
+        self._pulse   = 0.0
+        self._tmr = QTimer(self)
+        self._tmr.timeout.connect(self._step)
+        self._tmr.start(16)
+
+    def set_active(self, on: bool):
+        self._active = on
+        self.update()
+
+    def _step(self):
+        target = 1.0 if (self.underMouse() or self._active) else 0.0
+        self._hover += (target - self._hover) * 0.18
+        self._press *= 0.86
+        self._pulse = (self._pulse + 0.03) % (2 * math.pi)
+        spin = 0.4 + 2.6 * self._hover
+        self._angle = (self._angle + spin) % 360
+        self.update()
+
+    def mousePressEvent(self, e):
+        if e.button() == Qt.MouseButton.LeftButton:
+            self._press = 1.0
+
+    def mouseReleaseEvent(self, e):
+        if e.button() == Qt.MouseButton.LeftButton and self.rect().contains(e.pos()):
+            self.clicked.emit()
+
+    def paintEvent(self, _):
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        W = self.width(); cx = cy = W / 2
+        hov = max(0.0, min(1.0, self._hover))
+        breathe = 0.5 + 0.5 * math.sin(self._pulse)
+
+        # soft outer glow
+        for i in range(6, 0, -1):
+            r = (W / 2 - 2) * (0.72 + i * 0.045) * (1 + 0.02 * self._press)
+            a = int((10 + 26 * hov + 8 * breathe) * (i / 6))
+            p.setPen(Qt.PenStyle.NoPen)
+            p.setBrush(QBrush(qcol(C.PRI, a)))
+            p.drawEllipse(QPointF(cx, cy), r, r)
+
+        # solid disc (never transparent)
+        r_disc = W / 2 - 5
+        grad = QRadialGradient(cx, cy - r_disc * 0.3, r_disc * 1.6)
+        grad.setColorAt(0.0, qcol(C.PANEL2, 255))
+        grad.setColorAt(1.0, qcol(C.BG, 255))
+        p.setBrush(QBrush(grad))
+        p.setPen(QPen(qcol(C.PRI, int(140 + 100 * hov)), 1.4))
+        p.drawEllipse(QPointF(cx, cy), r_disc, r_disc)
+
+        # rotating dashed ring
+        p.setPen(QPen(qcol(C.PRI, int(90 + 120 * hov)), 1.6))
+        p.setBrush(Qt.BrushStyle.NoBrush)
+        rr = r_disc - 3
+        rect = QRectF(cx - rr, cy - rr, rr * 2, rr * 2)
+        base = self._angle
+        for k in range(4):
+            p.drawArc(rect, int((base + k * 90) * 16), int(52 * 16))
+
+        # gear glyph
+        p.save()
+        p.translate(cx, cy)
+        p.rotate(self._angle * 0.6)
+        col = qcol(C.PRI, int(200 + 55 * hov))
+        p.setPen(QPen(col, 2.0))
+        p.setBrush(Qt.BrushStyle.NoBrush)
+        r_out = r_disc * 0.60
+        r_in  = r_disc * 0.34
+        for i in range(8):
+            a = math.radians(i * 45)
+            p.drawLine(QPointF(math.cos(a) * r_in,  math.sin(a) * r_in),
+                       QPointF(math.cos(a) * r_out, math.sin(a) * r_out))
+        p.drawEllipse(QPointF(0, 0), r_in, r_in)
+        p.setBrush(QBrush(qcol(C.PRI, int(120 + 100 * hov))))
+        p.setPen(Qt.PenStyle.NoPen)
+        p.drawEllipse(QPointF(0, 0), r_in * 0.34, r_in * 0.34)
+        p.restore()
+
 
 class MetricBar(QWidget):
 
@@ -1892,16 +1999,16 @@ class MainWindow(QMainWindow):
         root = QVBoxLayout(central)
         root.setContentsMargins(0, 0, 0, 0)
         root.setSpacing(0)
-        root.addWidget(self._build_header())
 
-        body = QHBoxLayout()
-        body.setContentsMargins(0, 0, 0, 0)
-        body.setSpacing(0)
+        # Header/footer/side panels are still constructed (their widgets are
+        # used by the rest of the app) but they now live INSIDE the settings
+        # panel instead of cluttering the main view.
+        self._header      = self._build_header()
+        self._left_panel  = self._build_left_panel()
+        self._right_panel = self._build_right_panel()
+        self._header.hide()
 
-        self._left_panel = self._build_left_panel()
-        body.addWidget(self._left_panel, stretch=0)
-
-        # Center column: HUD + resizable content panel via QSplitter
+        # Center: HUD (the orb) + optional content panel
         self.hud = HudCanvas(face_path, _display)
         self.hud.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         self._content_panel = self._build_content_panel()
@@ -1932,6 +2039,7 @@ class MainWindow(QMainWindow):
         _cam_x.clicked.connect(self._close_feed_view)
         _cam_hdr.addWidget(_cam_x)
         _cam_v.addLayout(_cam_hdr)
+        self._cam_title    = _cam_title
         self._cam_live_lbl = QLabel()
         self._cam_live_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._cam_live_lbl.setStyleSheet("background: transparent;")
@@ -1940,7 +2048,7 @@ class MainWindow(QMainWindow):
         )
         _cam_v.addWidget(self._cam_live_lbl, stretch=1)
 
-        # Stack: 0 = animated HUD, 1 = live camera
+        # Stack: 0 = animated HUD (orb), 1 = live camera
         self._hud_cam_stack = QStackedWidget()
         self._hud_cam_stack.addWidget(self.hud)
         self._hud_cam_stack.addWidget(_cam_cont)
@@ -1960,15 +2068,16 @@ class MainWindow(QMainWindow):
         self._center_split.setStretchFactor(0, 3)
         self._center_split.setStretchFactor(1, 1)
         self._center_split.setCollapsible(0, False)
-        body.addWidget(self._center_split, stretch=5)
+        root.addWidget(self._center_split, stretch=1)
 
-        self._right_panel = self._build_right_panel()
-        body.addWidget(self._right_panel, stretch=0)
+        # Floating settings (gear) button — the ONLY chrome on screen
+        self._gear_btn = _GearButton(central)
+        self._gear_btn.move(16, 16)
+        self._gear_btn.clicked.connect(self._toggle_drawer)
+        self._gear_btn.show()
+        self._gear_btn.raise_()
 
-        root.addLayout(body, stretch=1)
-        root.addWidget(self._build_footer())
-
-        # Quick-access drawer (floating overlay, built after central widget layout is done)
+        # Sliding settings panel (Remote control, mic, monitor, log, input…)
         self._quick_drawer = self._build_quick_drawer()
         self._update_autostart_btn(self._check_autostart())
         from memory.config_manager import get_brief_enabled as _gbe
@@ -2001,6 +2110,8 @@ class MainWindow(QMainWindow):
         self._feed_mode = "none"             # none | camera | scan | phonecam — who owns the HUD area
         self._pcam_px   = None               # latest phone live frame (QPixmap)
         self._pcam_dets: list = []           # latest live detections for that frame
+        self._scan_px   = None               # frozen EDITH scan frame (QPixmap)
+        self._scan_dets: list = []           # detections for that frozen frame
         self.devices_provider = None         # set by main.py: () -> list[dict]
         self.devices_kicker   = None         # set by main.py: (dev_id | "revoke") -> None
 
@@ -2031,8 +2142,8 @@ class MainWindow(QMainWindow):
         pw = _CameraPreview._W
         ph = self._cam_preview.height()
         self._cam_preview.setGeometry(
-            cw.width() - _RIGHT_W - pw - 12,
-            cw.height() - ph - 28,
+            cw.width() - pw - 16,
+            cw.height() - ph - 16,
             pw, ph,
         )
 
@@ -2090,44 +2201,13 @@ class MainWindow(QMainWindow):
                 cap = cv2.VideoCapture(0)
             if not cap.isOpened():
                 return
-                
-            face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_frontalface_default.xml')
-            eye_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_eye.xml')
-
             # warm-up frames
             for _ in range(5):
                 cap.read()
             while not self._cam_stop.wait(0.033) and cap.isOpened():
                 ret, frame = cap.read()
                 if ret and frame is not None:
-                    output_frame = frame
-                    try:
-                        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-                        faces = face_cascade.detectMultiScale(gray, 1.3, 5)
-                        
-                        for (x, y, w, h) in faces:
-                            roi_gray = gray[y:y+h, x:x+w]
-                            roi_color = frame[y:y+h, x:x+w]
-                            eyes = eye_cascade.detectMultiScale(roi_gray, 1.1, 4)
-                            if len(eyes) > 0:
-                                ex, ey, ew, eh = eyes[0]
-                                margin_x = int(ew * 0.5)
-                                margin_y = int(eh * 0.5)
-                                
-                                eye_y1 = max(0, ey - margin_y)
-                                eye_y2 = min(roi_color.shape[0], ey + eh + margin_y)
-                                eye_x1 = max(0, ex - margin_x)
-                                eye_x2 = min(roi_color.shape[1], ex + ew + margin_x)
-                                
-                                eye_crop = roi_color[eye_y1:eye_y2, eye_x1:eye_x2]
-                                if eye_crop.size > 0:
-                                    output_frame = cv2.resize(eye_crop, (frame.shape[1], frame.shape[0]), interpolation=cv2.INTER_LINEAR)
-                                    cv2.putText(output_frame, "Eye Track & Zoom", (20, 40), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
-                                break
-                    except Exception as e:
-                        pass # fallback to original frame
-                        
-                    _, buf = cv2.imencode(".jpg", output_frame, [cv2.IMWRITE_JPEG_QUALITY, 65])
+                    _, buf = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 65])
                     self._cam_frame_sig.emit(buf.tobytes())
             cap.release()
         except Exception as e:
@@ -2152,21 +2232,324 @@ class MainWindow(QMainWindow):
     # --- Shared EDITH box painter -------------------------------------------
     _DET_COLORS = None   # lazily built QColor map
 
+    # Bone chain for the EDITH skeleton overlay
+    _BONES = (
+        ("head", "neck"),
+        ("neck", "l_shoulder"), ("neck", "r_shoulder"),
+        ("l_shoulder", "l_elbow"), ("l_elbow", "l_wrist"),
+        ("r_shoulder", "r_elbow"), ("r_elbow", "r_wrist"),
+        ("neck", "pelvis"),
+        ("l_shoulder", "l_hip"), ("r_shoulder", "r_hip"),
+        ("pelvis", "l_hip"), ("pelvis", "r_hip"), ("l_hip", "r_hip"),
+        ("l_hip", "l_knee"), ("l_knee", "l_ankle"),
+        ("r_hip", "r_knee"), ("r_knee", "r_ankle"),
+    )
+    _SKEL_COL   = QColor("#ff2d3d")     # bones — red, like the reference
+    _AURA_COL   = QColor("#ffa500")     # silhouette aura — orange
+
+    def _person_phase(self) -> float:
+        """0..1 animation phase shared by every person overlay (pulsing aura)."""
+        return (time.time() * 0.9) % 1.0
+
+    def _draw_person_fx(self, p: QPainter, d: dict, sw: int, sh: int,
+                        x: int, y: int, bw: int, bh: int) -> None:
+        """EDITH-style person effect: glowing silhouette aura + red bone rig."""
+        ph    = self._person_phase()
+        pulse = 0.5 + 0.5 * math.sin(ph * 2 * math.pi)
+
+        def _pt(q):
+            y, x = float(q[0]), float(q[1])
+            if y != y or x != x:                     # NaN
+                raise ValueError("nan point")
+            return QPointF(x / 1000.0 * sw, y / 1000.0 * sh)
+
+        # ── 1) silhouette outline (falls back to the bounding box) ─────────
+        # Rebuilding the QPainterPath every repaint is pure overhead: at 60 Hz
+        # the FX timer redraws the same geometry many times between frames.
+        # Cache it against the raw coordinates + canvas size.
+        outline = d.get("outline") or []
+        cache_key = (id(d), sw, sh, x, y, bw, bh, len(outline))
+        cached = getattr(self, "_fx_path_cache", None)
+        if cached is not None and cached[0] == cache_key:
+            path = cached[1]
+        else:
+            path = QPainterPath()
+            if isinstance(outline, (list, tuple)) and len(outline) >= 4:
+                pts = []
+                for q in outline[:40]:
+                    if isinstance(q, (list, tuple)) and len(q) >= 2:
+                        try:
+                            pts.append(_pt(q))
+                        except (TypeError, ValueError):
+                            pass
+                if len(pts) >= 4:
+                    path.moveTo(pts[0])
+                    for q in pts[1:]:
+                        path.lineTo(q)
+                    path.closeSubpath()
+            if path.isEmpty():
+                path.addRoundedRect(QRectF(x, y, bw, bh), 10, 10)
+            self._fx_path_cache = (cache_key, path)
+
+        # Glowing aura. Antialiasing wide strokes is by far the most expensive
+        # operation in the whole HUD (~9 ms vs ~1 ms), and it is invisible on
+        # the soft glow layers — so only the final crisp outline gets it.
+        p.setBrush(Qt.BrushStyle.NoBrush)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing, False)
+        for w, a in ((10, 34), (5, 70)):        # 2 glow layers read the same
+            col = QColor(self._AURA_COL)
+            col.setAlpha(int(a * (0.65 + 0.35 * pulse)))
+            pen = QPen(col, w)
+            pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
+            pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+            p.setPen(pen)
+            p.drawPath(path)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        col = QColor(self._AURA_COL)
+        col.setAlpha(int(210 * (0.65 + 0.35 * pulse)))
+        pen = QPen(col, 2)
+        pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
+        p.setPen(pen)
+        p.drawPath(path)
+
+        # soft inner fill so the target reads as "locked"
+        fill = QColor(self._AURA_COL)
+        fill.setAlpha(int(26 + 16 * pulse))
+        p.setPen(Qt.PenStyle.NoPen)
+        p.setBrush(QBrush(fill))
+        p.drawPath(path)
+        p.setBrush(Qt.BrushStyle.NoBrush)
+
+        # ── 2) skeleton / bone rig ─────────────────────────────────────────
+        pose = d.get("pose")
+        joints: dict[str, QPointF] = {}
+        if isinstance(pose, dict):
+            for k, q in pose.items():
+                if isinstance(q, (list, tuple)) and len(q) >= 2:
+                    try:
+                        joints[str(k)] = _pt(q)
+                    except (TypeError, ValueError):
+                        pass
+        if len(joints) < 3:
+            # A detector that only knows the bounding box (e.g. HOG) carries no
+            # joint data. Drawing a generic rig there paints a skeleton that
+            # does not match the real body, so we show only the outline.
+            if d.get("no_skeleton"):
+                joints = {}
+            else:
+                joints = self._fallback_skeleton(x, y, bw, bh)
+
+        # bone glow pass (no AA — it is a blur anyway), then crisp bone pass
+        bones = [(joints[a], joints[b]) for a, b in self._BONES
+                 if a in joints and b in joints] if joints else []
+        for w, a, aa in ((5, 70, False), (2, 255, True)):
+            if not bones:
+                break
+            p.setRenderHint(QPainter.RenderHint.Antialiasing, aa)
+            col = QColor(self._SKEL_COL)
+            col.setAlpha(int(a * (0.7 + 0.3 * pulse)) if a < 255 else 255)
+            pen = QPen(col, w)
+            pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+            p.setPen(pen)
+            for q1, q2 in bones:
+                p.drawLine(q1, q2)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+
+        # joint nodes
+        p.setPen(Qt.PenStyle.NoPen)
+        for name, q in joints.items():
+            r = 4.0 if name in ("head", "pelvis", "neck") else 2.6
+            halo = QColor(self._SKEL_COL); halo.setAlpha(90)
+            p.setBrush(QBrush(halo))
+            p.drawEllipse(q, r * 2.1, r * 2.1)
+            p.setBrush(QBrush(QColor("#fff0f0")))
+            p.drawEllipse(q, r, r)
+        p.setBrush(Qt.BrushStyle.NoBrush)
+
+        # ── 3) animated corner brackets around the target ──────────────────
+        col = QColor(self._AURA_COL)
+        col.setAlpha(int(150 + 105 * pulse))
+        p.setPen(QPen(col, 2))
+        cl = max(8, int(min(bw, bh) * 0.22))
+        pad = int(4 + 3 * pulse)
+        x0, y0 = x - pad, y - pad
+        x1, y1 = x + bw + pad, y + bh + pad
+        for bx, by, dx, dy in ((x0, y0, 1, 1), (x1, y0, -1, 1),
+                               (x0, y1, 1, -1), (x1, y1, -1, -1)):
+            p.drawLine(QPointF(bx, by), QPointF(bx + dx * cl, by))
+            p.drawLine(QPointF(bx, by), QPointF(bx, by + dy * cl))
+
+        # ── 4) scan line sweeping down the target ──────────────────────────
+        sy = y + bh * ph
+        gl = QLinearGradient(x, sy, x + bw, sy)
+        c0 = QColor(self._AURA_COL); c0.setAlpha(0)
+        c1 = QColor("#fff2cc");      c1.setAlpha(190)
+        gl.setColorAt(0.0, c0); gl.setColorAt(0.5, c1); gl.setColorAt(1.0, c0)
+        p.setPen(QPen(QBrush(gl), 2))
+        p.drawLine(QPointF(x, sy), QPointF(x + bw, sy))
+
+    _FACE_KNOWN   = QColor("#00ffa8")     # recognised → green lock
+    _FACE_UNKNOWN = QColor("#00d4ff")     # detected but not enrolled → cyan
+
+    def _draw_face_mesh(self, p: QPainter, d: dict, sw: int, sh: int,
+                        col: QColor, pulse: float) -> bool:
+        """Wireframe face mask: node cloud + tesselation, like a biometric scan.
+
+        Returns True when a mesh was actually drawn.
+        """
+        mesh = d.get("mesh")
+        if not isinstance(mesh, (list, tuple)) or len(mesh) < 100:
+            return False
+
+        # normalised [y, x] → screen points (cached: the point cloud only
+        # changes when a new frame arrives, but we repaint at 60 Hz)
+        key = (id(d), sw, sh, len(mesh))
+        cached = getattr(self, "_mesh_cache", None)
+        if cached is not None and cached[0] == key:
+            pts = cached[1]
+        else:
+            pts = []
+            for q in mesh:
+                try:
+                    yy, xx = float(q[0]), float(q[1])
+                except (TypeError, ValueError, IndexError):
+                    return False
+                if yy != yy or xx != xx:
+                    return False
+                pts.append(QPointF(xx / 1000.0 * sw, yy / 1000.0 * sh))
+            self._mesh_cache = (key, pts)
+
+        edges = d.get("mesh_edges") or []
+        n = len(pts)
+
+        # ── 1) wire tesselation ────────────────────────────────────────────
+        if edges:
+            wire = QColor(col)
+            wire.setAlpha(int(70 + 40 * pulse))
+            p.setPen(QPen(wire, 0.7))
+            p.setBrush(Qt.BrushStyle.NoBrush)
+            p.setRenderHint(QPainter.RenderHint.Antialiasing, False)
+            for e in edges:
+                try:
+                    a, b = int(e[0]), int(e[1])
+                except (TypeError, ValueError, IndexError):
+                    continue
+                if 0 <= a < n and 0 <= b < n:
+                    p.drawLine(pts[a], pts[b])
+            p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+
+        # ── 2) node cloud — the "measured points" of the face print ────────
+        node = QColor("#ffffff")
+        node.setAlpha(int(170 + 85 * pulse))
+        p.setPen(Qt.PenStyle.NoPen)
+        p.setBrush(QBrush(node))
+        p.setRenderHint(QPainter.RenderHint.Antialiasing, False)
+        for q in pts:
+            p.drawEllipse(q, 1.1, 1.1)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        p.setBrush(Qt.BrushStyle.NoBrush)
+
+        # ── 3) scan line sweeping across the mesh (biometric read-out) ─────
+        ys = [q.y() for q in pts]
+        xs = [q.x() for q in pts]
+        top, bot = min(ys), max(ys)
+        lft, rgt = min(xs), max(xs)
+        sy = top + (bot - top) * (self._person_phase() % 1.0)
+        grad = QLinearGradient(lft, sy, rgt, sy)
+        c0 = QColor(col); c0.setAlpha(0)
+        c1 = QColor("#ffffff"); c1.setAlpha(200)
+        grad.setColorAt(0.0, c0); grad.setColorAt(0.5, c1); grad.setColorAt(1.0, c0)
+        p.setPen(QPen(QBrush(grad), 1.6))
+        p.drawLine(QPointF(lft, sy), QPointF(rgt, sy))
+        return True
+
+    def _draw_face_fx(self, p: QPainter, d: dict,
+                      x: int, y: int, bw: int, bh: int,
+                      sw: int = 0, sh: int = 0) -> None:
+        """Targeting reticle + biometric wireframe mask over a detected face."""
+        known = bool(d.get("known"))
+        col   = self._FACE_KNOWN if known else self._FACE_UNKNOWN
+        pulse = 0.5 + 0.5 * math.sin(self._person_phase() * 2 * math.pi)
+
+        if sw and sh:
+            self._draw_face_mesh(p, d, sw, sh, col, pulse)
+
+        p.setBrush(Qt.BrushStyle.NoBrush)
+        # soft halo
+        p.setRenderHint(QPainter.RenderHint.Antialiasing, False)
+        halo = QColor(col); halo.setAlpha(int(40 + 30 * pulse))
+        p.setPen(QPen(halo, 6))
+        p.drawRect(x, y, bw, bh)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+
+        # crisp frame
+        main = QColor(col); main.setAlpha(230)
+        p.setPen(QPen(main, 1.6))
+        p.drawRect(x, y, bw, bh)
+
+        # corner ticks
+        cl = max(6, int(min(bw, bh) * 0.26))
+        p.setPen(QPen(main, 2.4))
+        for bx, by, dx, dy in ((x, y, 1, 1), (x + bw, y, -1, 1),
+                               (x, y + bh, 1, -1), (x + bw, y + bh, -1, -1)):
+            p.drawLine(QPointF(bx, by), QPointF(bx + dx * cl, by))
+            p.drawLine(QPointF(bx, by), QPointF(bx, by + dy * cl))
+
+        # cross-hair on the face centre
+        cx, cy = x + bw / 2, y + bh / 2
+        tick = max(4, int(min(bw, bh) * 0.10))
+        faint = QColor(col); faint.setAlpha(150)
+        p.setPen(QPen(faint, 1))
+        p.drawLine(QPointF(cx - tick, cy), QPointF(cx + tick, cy))
+        p.drawLine(QPointF(cx, cy - tick), QPointF(cx, cy + tick))
+
+        # a recognised identity gets a pulsing lock ring
+        if known:
+            r = max(bw, bh) * (0.50 + 0.03 * pulse)
+            ring = QColor(col); ring.setAlpha(int(90 + 80 * pulse))
+            p.setPen(QPen(ring, 1.6))
+            p.drawEllipse(QPointF(cx, cy), r, r)
+
+    @staticmethod
+    def _fallback_skeleton(x: int, y: int, bw: int, bh: int) -> dict:
+        """Anatomically-plausible rig derived from the bounding box alone,
+        used when the model didn't return pose keypoints."""
+        def P(fx, fy):
+            return QPointF(x + bw * fx, y + bh * fy)
+        return {
+            "head":       P(0.50, 0.07),
+            "neck":       P(0.50, 0.17),
+            "l_shoulder": P(0.31, 0.21), "r_shoulder": P(0.69, 0.21),
+            "l_elbow":    P(0.22, 0.39), "r_elbow":    P(0.78, 0.39),
+            "l_wrist":    P(0.19, 0.56), "r_wrist":    P(0.81, 0.56),
+            "pelvis":     P(0.50, 0.53),
+            "l_hip":      P(0.38, 0.55), "r_hip":      P(0.62, 0.55),
+            "l_knee":     P(0.37, 0.75), "r_knee":     P(0.63, 0.75),
+            "l_ankle":    P(0.36, 0.96), "r_ankle":    P(0.64, 0.96),
+        }
+
     def _draw_dets_on(self, px2: QPixmap, detections) -> None:
-        """Paint labeled detection boxes (0-1000 normalized) onto a pixmap."""
+        """Paint labeled detection boxes (0-1000 normalized) onto a pixmap.
+        People additionally get the EDITH silhouette-aura + skeleton effect."""
         if self._DET_COLORS is None:
             type(self)._DET_COLORS = {
                 "person":  QColor("#f97316"),
                 "vehicle": QColor("#facc15"),
                 "object":  QColor("#00d4ff"),
+                "face":    QColor("#00ffa8"),
             }
         sw, sh = px2.width(), px2.height()
+        if sw <= 0 or sh <= 0:
+            return
         p = QPainter(px2)
         try:
+            p.setRenderHint(QPainter.RenderHint.Antialiasing)
             p.setFont(QFont("Courier New", 8, QFont.Weight.Bold))
             for d in (detections or [])[:12]:
+                if not isinstance(d, dict):
+                    continue
                 box = d.get("box") or []
-                if len(box) != 4:
+                if not isinstance(box, (list, tuple)) or len(box) != 4:
                     continue
                 try:
                     ymin, xmin, ymax, xmax = (
@@ -2174,26 +2557,51 @@ class MainWindow(QMainWindow):
                     )
                 except (TypeError, ValueError):
                     continue
+                if not all(v == v for v in (ymin, xmin, ymax, xmax)):
+                    continue                      # NaN guard
                 if xmax - xmin < 5 or ymax - ymin < 5:
                     continue
-                col = self._DET_COLORS.get(d.get("kind"), self._DET_COLORS["object"])
-                pen = QPen(col)
-                pen.setWidth(2)
-                p.setPen(pen)
+                kind = d.get("kind")
+                col  = self._DET_COLORS.get(kind, self._DET_COLORS["object"])
                 x  = int(xmin / 1000 * sw)
                 y  = int(ymin / 1000 * sh)
                 bw = int((xmax - xmin) / 1000 * sw)
                 bh = int((ymax - ymin) / 1000 * sh)
-                p.drawRect(x, y, bw, bh)
+
+                if kind == "face":
+                    try:
+                        self._draw_face_fx(p, d, x, y, bw, bh, sw, sh)
+                    except Exception:
+                        p.setPen(QPen(col, 2))
+                        p.setBrush(Qt.BrushStyle.NoBrush)
+                        p.drawRect(x, y, bw, bh)
+                elif kind == "person":
+                    # full EDITH treatment: aura outline + bones + brackets
+                    try:
+                        self._draw_person_fx(p, d, sw, sh, x, y, bw, bh)
+                    except Exception:
+                        p.setPen(QPen(col, 2))
+                        p.setBrush(Qt.BrushStyle.NoBrush)
+                        p.drawRect(x, y, bw, bh)
+                else:
+                    pen = QPen(col)
+                    pen.setWidth(2)
+                    p.setPen(pen)
+                    p.setBrush(Qt.BrushStyle.NoBrush)
+                    p.drawRect(x, y, bw, bh)
+
                 label = str(d.get("label") or "TARGET").upper()[:42]
                 fm    = p.fontMetrics()
                 tw    = min(fm.horizontalAdvance(label) + 10, sw)
                 th    = fm.height() + 4
                 ly    = y - th if y - th > 0 else y
+                p.setPen(Qt.PenStyle.NoPen)
                 p.fillRect(x, ly, tw, th, col)
                 p.setPen(QPen(QColor("#04070c")))
                 p.drawText(QRectF(x + 5, ly, tw - 8, th),
                            Qt.AlignmentFlag.AlignVCenter, label)
+        except Exception as e:
+            print(f"[HUD] overlay paint failed: {e}")
         finally:
             p.end()
 
@@ -2225,23 +2633,41 @@ class MainWindow(QMainWindow):
     def _on_pcam_dets(self, dets) -> None:
         if self._feed_mode != "phonecam":
             return
-        self._pcam_dets = dets or []
-        self._repaint_pcam()
+        # keep only well-formed entries — the HUD assumes dicts downstream
+        self._pcam_dets = [d for d in (dets or []) if isinstance(d, dict)]
+        try:
+            self._repaint_pcam()
+        except Exception as e:
+            print(f"[HUD] pcam repaint failed: {e}")
+
+    def _scaled_frame(self, src: QPixmap, key: str) -> QPixmap:
+        """Scale `src` to the label, reusing the previous result when possible.
+
+        The FX timer repaints at 60 Hz while new frames arrive at ~30 Hz, so
+        without this cache every second repaint would pay for a full smooth
+        rescale (~4 ms) that produces an identical bitmap.
+        """
+        w, h = self._cam_live_lbl.width(), self._cam_live_lbl.height()
+        if w <= 1 or h <= 1:
+            return QPixmap(src)
+        sig = (key, src.cacheKey(), w, h)
+        if getattr(self, "_scale_sig", None) == sig:
+            return QPixmap(self._scale_cache)      # copy-on-write: free
+        out = src.scaled(
+            w, h,
+            Qt.AspectRatioMode.KeepAspectRatio,
+            Qt.TransformationMode.SmoothTransformation,
+        )
+        self._scale_sig, self._scale_cache = sig, out
+        return QPixmap(out)
 
     def _repaint_pcam(self) -> None:
         if self._pcam_px is None:
             return
-        w, h = self._cam_live_lbl.width(), self._cam_live_lbl.height()
-        if w <= 1 or h <= 1:
-            px2 = QPixmap(self._pcam_px)
-        else:
-            px2 = self._pcam_px.scaled(
-                w, h,
-                Qt.AspectRatioMode.KeepAspectRatio,
-                Qt.TransformationMode.SmoothTransformation,
-            )
+        px2 = self._scaled_frame(self._pcam_px, "pcam")
         self._draw_dets_on(px2, self._pcam_dets)
         self._cam_live_lbl.setPixmap(px2)
+        self._sync_fx_timer()
 
     # --- Phone scan overlay (EDITH snapshot with detection boxes) ----------
     def _on_phone_scan(self, img_bytes: bytes, detections) -> None:
@@ -2254,24 +2680,55 @@ class MainWindow(QMainWindow):
         self._cam_title.setText("◈  PHONE SCAN — EDITH")
         self._hud_cam_stack.setCurrentIndex(1)
 
-        w, h = self._cam_live_lbl.width(), self._cam_live_lbl.height()
-        if w <= 1 or h <= 1:
-            px2 = px
-        else:
-            px2 = px.scaled(
-                w, h,
-                Qt.AspectRatioMode.KeepAspectRatio,
-                Qt.TransformationMode.SmoothTransformation,
-            )
-        self._draw_dets_on(px2, detections)
-        self._cam_live_lbl.setPixmap(px2)
+        self._scan_px   = px
+        self._scan_dets = [d for d in (detections or [])
+                           if isinstance(d, dict)]
+        self._repaint_scan()
+        self._sync_fx_timer()
         QTimer.singleShot(20000, self._leave_scan)
+
+    def _repaint_scan(self) -> None:
+        if getattr(self, "_scan_px", None) is None:
+            return
+        px2 = self._scaled_frame(self._scan_px, "scan")
+        self._draw_dets_on(px2, self._scan_dets)
+        self._cam_live_lbl.setPixmap(px2)
+
+    # --- EDITH person-effect animation --------------------------------------
+    def _has_person(self) -> bool:
+        dets = (self._scan_dets if self._feed_mode == "scan" else self._pcam_dets)
+        return any(isinstance(d, dict) and d.get("kind") in ("person", "face")
+                   for d in (dets or []))
+
+    def _sync_fx_timer(self) -> None:
+        """Run a ~20 fps repaint loop while a human target is highlighted so the
+        aura pulses / scan line sweeps even on a frozen snapshot."""
+        if not hasattr(self, "_fx_tmr"):
+            self._fx_tmr = QTimer(self)
+            self._fx_tmr.setInterval(16)        # ~60 FPS
+            self._fx_tmr.timeout.connect(self._fx_tick)
+        if self._feed_mode in ("scan", "phonecam") and self._has_person():
+            if not self._fx_tmr.isActive():
+                self._fx_tmr.start()
+        elif self._fx_tmr.isActive():
+            self._fx_tmr.stop()
+
+    def _fx_tick(self) -> None:
+        if self._feed_mode == "scan":
+            self._repaint_scan()
+        elif self._feed_mode == "phonecam":
+            self._repaint_pcam()
+        else:
+            self._fx_tmr.stop()
 
     def _leave_scan(self) -> None:
         if self._feed_mode == "scan":
             self._feed_mode = "none"
             self._hud_cam_stack.setCurrentIndex(0)
             self._cam_live_lbl.clear()
+        self._scan_px   = None
+        self._scan_dets = []
+        self._sync_fx_timer()
 
     # ------------------------------------------------------------------
     # Icon generation — arc-reactor style, rendered with Pillow
@@ -2624,6 +3081,14 @@ class MainWindow(QMainWindow):
         else:
             self.showFullScreen()
 
+    def showEvent(self, event):
+        super().showEvent(event)
+        if hasattr(self, "_gear_btn"):
+            self._gear_btn.move(16, 16)
+            self._gear_btn.raise_()
+        if hasattr(self, "_quick_drawer"):
+            self._position_quick_drawer()
+
     def resizeEvent(self, event):
         super().resizeEvent(event)
         cw = self.centralWidget()
@@ -2648,20 +3113,23 @@ class MainWindow(QMainWindow):
                 (cw.height() - oh) // 2,
                 ow, oh,
             )
-        # Camera preview — bottom-right corner of the center/HUD area
+        # Camera preview — bottom-right corner
         pw = _CameraPreview._W
         ph = self._cam_preview.height() or _CameraPreview._H
         self._cam_preview.setGeometry(
-            cw.width() - _RIGHT_W - pw - 12,
-            cw.height() - ph - 28,
+            cw.width() - pw - 16,
+            cw.height() - ph - 16,
             pw, ph,
         )
         # Clipboard panel — bottom-center
         if hasattr(self, '_clipboard_panel') and self._clipboard_panel.isVisible():
             self._position_clipboard_panel()
-        # Quick drawer — reposition if open
-        if hasattr(self, '_quick_drawer') and self._quick_drawer.isVisible():
+        # Settings drawer + floating gear button
+        if hasattr(self, '_quick_drawer'):
             self._position_quick_drawer()
+        if hasattr(self, '_gear_btn'):
+            self._gear_btn.move(16, 16)
+            self._gear_btn.raise_()
 
     def _update_metrics(self):
         snap = _metrics.snapshot()
@@ -2782,6 +3250,8 @@ class MainWindow(QMainWindow):
     def _tick_clock(self):
         self._clock_lbl.setText(time.strftime("%H:%M:%S"))
         self._date_lbl.setText(time.strftime("%a %d %b %Y"))
+        if hasattr(self, "_clock_lbl2"):
+            self._clock_lbl2.setText(time.strftime("%H:%M:%S"))
 
     def _build_left_panel(self) -> QWidget:
         w = QWidget()
@@ -2924,20 +3394,26 @@ class MainWindow(QMainWindow):
         return w
 
     def _build_quick_drawer(self) -> QWidget:
-        """Floating overlay panel shown when the ⚙ header button is toggled."""
+        """Sliding settings panel — the ONLY chrome besides the orb.
+
+        Contains every control that used to be spread across the header,
+        the side panels and the footer: remote control, mic, interrupt,
+        system monitor, activity log, file upload and the command input.
+        """
         _BTN_STYLE_PRI = f"""
             QPushButton {{
                 background: #00091a; color: {C.PRI};
-                border: 1px solid {C.PRI_DIM}; border-radius: 3px;
-                text-align: left; padding: 0 8px;
+                border: 1px solid {C.PRI_DIM}; border-radius: 4px;
+                text-align: left; padding: 0 10px;
             }}
             QPushButton:hover {{ background: {C.PRI_GHO}; border-color: {C.PRI}; }}
+            QPushButton:pressed {{ background: {C.PRI_GHO}; }}
         """
         _BTN_STYLE_DIM = f"""
             QPushButton {{
-                background: transparent; color: {C.TEXT_MED};
-                border: 1px solid {C.BORDER}; border-radius: 3px;
-                text-align: left; padding: 0 8px;
+                background: {C.PANEL2}; color: {C.TEXT_MED};
+                border: 1px solid {C.BORDER}; border-radius: 4px;
+                text-align: left; padding: 0 10px;
             }}
             QPushButton:hover {{ color: {C.PRI}; border-color: {C.BORDER_B}; }}
         """
@@ -2947,56 +3423,104 @@ class MainWindow(QMainWindow):
         w.setStyleSheet(f"""
             QWidget#QuickDrawer {{
                 background: {C.DARK};
-                border: 1px solid {C.BORDER_B};
-                border-top: none;
-                border-radius: 0 0 6px 6px;
+                border-left: 1px solid {C.BORDER_B};
             }}
         """)
+        w.setAutoFillBackground(True)
         w.hide()
 
-        lay = QVBoxLayout(w)
-        lay.setContentsMargins(10, 8, 10, 10)
-        lay.setSpacing(5)
+        outer = QVBoxLayout(w)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(0)
 
-        hdr = QLabel("◈ CONTROLS")
-        hdr.setFont(QFont("Courier New", 7, QFont.Weight.Bold))
-        hdr.setStyleSheet(f"color: {C.PRI_DIM}; background: transparent; "
-                          f"border-bottom: 1px solid {C.BORDER}; padding-bottom: 4px;")
-        lay.addWidget(hdr)
+        # ── panel header ──────────────────────────────────────────────────
+        top = QWidget()
+        top.setFixedHeight(42)
+        top.setStyleSheet(f"background: {C.PANEL}; border-bottom: 1px solid {C.BORDER};")
+        top_l = QHBoxLayout(top)
+        top_l.setContentsMargins(12, 0, 8, 0)
+        ttl = QLabel("\u25c8  SETTINGS & CONTROLS")
+        ttl.setFont(QFont("Courier New", 9, QFont.Weight.Bold))
+        ttl.setStyleSheet(f"color: {C.PRI}; background: transparent; letter-spacing: 1px;")
+        top_l.addWidget(ttl)
+        top_l.addStretch()
+        self._clock_lbl2 = QLabel("")
+        self._clock_lbl2.setFont(QFont("Courier New", 9, QFont.Weight.Bold))
+        self._clock_lbl2.setStyleSheet(f"color: {C.TEXT_DIM}; background: transparent;")
+        top_l.addWidget(self._clock_lbl2)
+        close_b = QPushButton("\u2715")
+        close_b.setFixedSize(24, 24)
+        close_b.setCursor(Qt.CursorShape.PointingHandCursor)
+        close_b.setStyleSheet(f"""
+            QPushButton {{ background: transparent; color: {C.TEXT_DIM};
+                           border: none; font-size: 13px; }}
+            QPushButton:hover {{ color: {C.MUTED_C}; }}
+        """)
+        close_b.clicked.connect(lambda: self._toggle_drawer(False))
+        top_l.addSpacing(6)
+        top_l.addWidget(close_b)
+        outer.addWidget(top)
 
-        remote_btn = QPushButton("◉  REMOTE CONTROL")
-        remote_btn.setFixedHeight(30)
+        # ── scrollable body ───────────────────────────────────────────────
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+        scroll.setStyleSheet(f"""
+            QScrollArea {{ background: {C.DARK}; border: none; }}
+            QScrollBar:vertical {{ background: {C.BG}; width: 7px; border: none; }}
+            QScrollBar::handle:vertical {{ background: {C.BORDER_B};
+                                           border-radius: 3px; min-height: 20px; }}
+            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{
+                height: 0; border: none; }}
+        """)
+        body = QWidget()
+        body.setStyleSheet(f"background: {C.DARK};")
+        lay = QVBoxLayout(body)
+        lay.setContentsMargins(10, 10, 10, 12)
+        lay.setSpacing(6)
+
+        def _sec(txt):
+            l = QLabel(f"\u25b8 {txt}")
+            l.setFont(QFont("Courier New", 7, QFont.Weight.Bold))
+            l.setStyleSheet(f"color: {C.PRI_DIM}; background: transparent; "
+                            f"border-bottom: 1px solid {C.BORDER}; padding-bottom: 3px;")
+            return l
+
+        lay.addWidget(_sec("CONTROLS"))
+
+        remote_btn = QPushButton("\u25c9  REMOTE CONTROL")
+        remote_btn.setFixedHeight(32)
         remote_btn.setFont(QFont("Courier New", 8, QFont.Weight.Bold))
         remote_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         remote_btn.setStyleSheet(_BTN_STYLE_PRI)
         remote_btn.clicked.connect(self._open_remote)
         lay.addWidget(remote_btn)
 
-        fs_btn = QPushButton("⛶  FULLSCREEN  [F11]")
-        fs_btn.setFixedHeight(26)
+        fs_btn = QPushButton("\u26f6  FULLSCREEN  [F11]")
+        fs_btn.setFixedHeight(28)
         fs_btn.setFont(QFont("Courier New", 7))
         fs_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         fs_btn.setStyleSheet(_BTN_STYLE_DIM)
         fs_btn.clicked.connect(self._toggle_fullscreen)
         lay.addWidget(fs_btn)
 
-        sc_btn = QPushButton("⊞  CREATE DESKTOP SHORTCUT")
-        sc_btn.setFixedHeight(26)
+        sc_btn = QPushButton("\u229e  CREATE DESKTOP SHORTCUT")
+        sc_btn.setFixedHeight(28)
         sc_btn.setFont(QFont("Courier New", 7))
         sc_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         sc_btn.setStyleSheet(_BTN_STYLE_DIM)
         sc_btn.clicked.connect(self._create_desktop_shortcut)
         lay.addWidget(sc_btn)
 
-        self._autostart_btn = QPushButton("◉  AUTO-START: OFF")
-        self._autostart_btn.setFixedHeight(26)
+        self._autostart_btn = QPushButton("\u25c9  AUTO-START: OFF")
+        self._autostart_btn.setFixedHeight(28)
         self._autostart_btn.setFont(QFont("Courier New", 7))
         self._autostart_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self._autostart_btn.clicked.connect(self._toggle_autostart)
         lay.addWidget(self._autostart_btn)
 
-        cust_btn = QPushButton("⚙  CUSTOMISE ASSISTANT")
-        cust_btn.setFixedHeight(26)
+        cust_btn = QPushButton("\u2699  CUSTOMISE ASSISTANT")
+        cust_btn.setFixedHeight(28)
         cust_btn.setFont(QFont("Courier New", 7))
         cust_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         cust_btn.setStyleSheet(_BTN_STYLE_DIM)
@@ -3004,30 +3528,89 @@ class MainWindow(QMainWindow):
         lay.addWidget(cust_btn)
 
         self._brief_btn = QPushButton()
-        self._brief_btn.setFixedHeight(26)
+        self._brief_btn.setFixedHeight(28)
         self._brief_btn.setFont(QFont("Courier New", 7))
         self._brief_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self._brief_btn.clicked.connect(self._toggle_brief)
         lay.addWidget(self._brief_btn)
 
-        w.adjustSize()
+        # ── system monitor (was the left panel) ───────────────────────────
+        lay.addSpacing(4)
+        self._left_panel.setMinimumWidth(0)
+        self._left_panel.setMaximumWidth(16777215)
+        self._left_panel.setStyleSheet(f"background: {C.DARK}; border: none;")
+        lay.addWidget(self._left_panel)
+
+        # ── log / upload / input / mic (was the right panel) ──────────────
+        self._right_panel.setMinimumWidth(0)
+        self._right_panel.setMaximumWidth(16777215)
+        self._right_panel.setStyleSheet(f"background: {C.DARK}; border: none;")
+        self._right_panel.setMinimumHeight(420)
+        lay.addWidget(self._right_panel, stretch=1)
+
+        hint = QLabel("[F4] Mute  \u00b7  [F11] Fullscreen  \u00b7  [ESC] Interrupt")
+        hint.setFont(QFont("Courier New", 7))
+        hint.setStyleSheet(f"color: {C.TEXT_DIM}; background: transparent;")
+        hint.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        lay.addWidget(hint)
+
+        scroll.setWidget(body)
+        outer.addWidget(scroll, stretch=1)
+
+        self._drawer_open = False
+        self._drawer_anim = None
         return w
 
-    def _toggle_drawer(self, checked: bool):
-        if checked:
-            self._position_quick_drawer()
+    _DRAWER_W = 360
+
+    def _toggle_drawer(self, checked: bool | None = None):
+        """Slide the settings panel in/out with an animation."""
+        from PyQt6.QtCore import QPropertyAnimation, QRect
+        want_open = (not self._drawer_open) if checked is None else bool(checked)
+        if want_open == self._drawer_open and self._quick_drawer.isVisible():
+            return
+        cw = self.centralWidget()
+        dw = min(self._DRAWER_W, max(260, cw.width() - 60))
+        h  = cw.height()
+        shown  = QRect(cw.width() - dw, 0, dw, h)
+        hidden = QRect(cw.width(),      0, dw, h)
+
+        if self._drawer_anim is not None:
+            self._drawer_anim.stop()
+
+        if want_open:
+            self._quick_drawer.setGeometry(hidden)
             self._quick_drawer.show()
             self._quick_drawer.raise_()
+            start, end = hidden, shown
         else:
-            self._quick_drawer.hide()
+            start, end = self._quick_drawer.geometry(), hidden
+
+        anim = QPropertyAnimation(self._quick_drawer, b"geometry", self)
+        anim.setDuration(280)
+        anim.setStartValue(start)
+        anim.setEndValue(end)
+        anim.setEasingCurve(QEasingCurve.Type.OutCubic
+                            if want_open else QEasingCurve.Type.InCubic)
+        if not want_open:
+            anim.finished.connect(self._quick_drawer.hide)
+        anim.start()
+        self._drawer_anim = anim
+        self._drawer_open = want_open
+        if hasattr(self, "_gear_btn"):
+            self._gear_btn.set_active(want_open)
+            self._gear_btn.raise_()
 
     def _position_quick_drawer(self):
-        if not hasattr(self, '_quick_drawer'):
+        if not hasattr(self, "_quick_drawer"):
             return
-        _W = 220
-        self._quick_drawer.setFixedWidth(_W)
-        self._quick_drawer.adjustSize()
-        self._quick_drawer.setGeometry(12, 54, _W, self._quick_drawer.sizeHint().height())
+        cw = self.centralWidget()
+        dw = min(self._DRAWER_W, max(260, cw.width() - 60))
+        if self._drawer_open:
+            self._quick_drawer.setGeometry(cw.width() - dw, 0, dw, cw.height())
+            self._quick_drawer.raise_()
+        else:
+            self._quick_drawer.setGeometry(cw.width(), 0, dw, cw.height())
 
     def _build_input_row(self) -> QHBoxLayout:
         row = QHBoxLayout(); row.setSpacing(5)
@@ -3324,7 +3907,8 @@ class MainWindow(QMainWindow):
             self._autostart_btn.setStyleSheet(f"""
                 QPushButton {{
                     background: #001a08; color: {C.GREEN};
-                    border: 1px solid {C.GREEN_D}; border-radius: 3px;
+                    border: 1px solid {C.GREEN_D}; border-radius: 4px;
+                    text-align: left; padding: 0 10px;
                 }}
                 QPushButton:hover {{ background: #002010; }}
             """)
@@ -3332,8 +3916,9 @@ class MainWindow(QMainWindow):
             self._autostart_btn.setText("◉  AUTO-START: OFF")
             self._autostart_btn.setStyleSheet(f"""
                 QPushButton {{
-                    background: transparent; color: {C.TEXT_DIM};
-                    border: 1px solid {C.BORDER}; border-radius: 3px;
+                    background: {C.PANEL2}; color: {C.TEXT_DIM};
+                    border: 1px solid {C.BORDER}; border-radius: 4px;
+                    text-align: left; padding: 0 10px;
                 }}
                 QPushButton:hover {{ color: {C.TEXT}; border: 1px solid {C.BORDER_B}; }}
             """)

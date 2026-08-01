@@ -223,6 +223,23 @@ TOOL_DECLARATIONS = [
         }
     },
     {
+        "name": "remember_face",
+        "description": (
+            "Learns the face currently visible on the live phone camera and "
+            "links it to a name, so the HUD labels that person from then on. "
+            "Call when the user says: remember this face, remember me, this is "
+            "<name>, save my face, запомни это лицо, запомни меня, это <имя>."
+        ),
+        "parameters": {
+            "type": "OBJECT",
+            "properties": {
+                "name": {"type": "STRING",
+                         "description": "Name to attach to the visible face"}
+            },
+            "required": ["name"]
+        }
+    },
+    {
         "name": "close_camera",
         "description": (
             "Closes the live camera view shown on screen. "
@@ -562,6 +579,7 @@ class JarvisLive:
         self._is_speaking         = False
         self._speaking_lock       = threading.Lock()
         self._phone_active        = False   # True while phone mic is streaming; pauses PC mic
+        self._last_frame: bytes | None = None   # newest live camera frame
         self._pending_vision       = None    # (img_bytes, mime_type, question, angle) to inject after tool response
         self._vision_cam_active    = False   # True if camera was opened for vision → auto-close after response
         self._vision_close_pending = False   # True after vision injected; next turn_complete closes camera
@@ -786,6 +804,27 @@ class JarvisLive:
                         f"telling them you are looking at their {_stall} right now. "
                         f"Do NOT describe or guess content — the actual image arrives in the NEXT message."
                     )
+
+            elif name == "remember_face":
+                who = (args.get("name") or args.get("person") or "").strip()
+                frame = self._last_frame
+                if not who:
+                    result = "Tell me the person's name so I can label the face."
+                elif not frame:
+                    result = ("No live camera frame available. Start the phone "
+                              "camera first, then ask me again.")
+                else:
+                    from actions.face_id import enroll as _enroll
+                    ok = await loop.run_in_executor(
+                        None, lambda: _enroll(frame, who)
+                    )
+                    if ok:
+                        self.ui.write_log(f"SYS: Face enrolled — {who}")
+                        result = (f"Saved. I will recognise {who} from now on. "
+                                  f"Show the face from a few angles to improve it.")
+                    else:
+                        result = ("I could not find a clear face in the frame. "
+                                  "Move closer to the camera and try again.")
 
             elif name == "close_camera":
                 self.ui.stop_camera_stream()
@@ -1471,13 +1510,9 @@ class JarvisLive:
         live = False
         last_det = 0.0
         det_task = None
-        
-        # Load Haar cascades for face & eye tracking zoom
-        import cv2
-        import numpy as np
-        face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_frontalface_default.xml')
-        eye_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_eye.xml')
-
+        trk_task = None
+        last_trk = 0.0
+        self._live_labels: list = []      # newest Gemini labels (slow path)
         while True:
             try:
                 frame = await asyncio.wait_for(q.get(), timeout=0.8)
@@ -1485,6 +1520,12 @@ class JarvisLive:
                 if live:   # stream went quiet — hide the PC overlay
                     live = False
                     last_det = 0.0
+                    self._live_labels = []
+                    try:
+                        from actions.pose_tracker import get_tracker
+                        get_tracker().reset()
+                    except Exception:
+                        pass
                     try:
                         self.ui.stop_phone_cam()
                     except Exception:
@@ -1494,36 +1535,6 @@ class JarvisLive:
                 print(f"[Dashboard] Cam queue error: {e}")
                 await asyncio.sleep(0.5)
                 continue
-                
-            # Process frame to detect eye and zoom
-            try:
-                np_arr = np.frombuffer(frame, np.uint8)
-                img = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
-                if img is not None:
-                    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-                    faces = face_cascade.detectMultiScale(gray, 1.3, 5)
-                    for (x, y, w, h) in faces:
-                        roi_gray = gray[y:y+h, x:x+w]
-                        roi_color = img[y:y+h, x:x+w]
-                        eyes = eye_cascade.detectMultiScale(roi_gray, 1.1, 4)
-                        if len(eyes) > 0:
-                            ex, ey, ew, eh = eyes[0]
-                            margin_x = int(ew * 0.5)
-                            margin_y = int(eh * 0.5)
-                            eye_y1 = max(0, ey - margin_y)
-                            eye_y2 = min(roi_color.shape[0], ey + eh + margin_y)
-                            eye_x1 = max(0, ex - margin_x)
-                            eye_x2 = min(roi_color.shape[1], ex + ew + margin_x)
-                            eye_crop = roi_color[eye_y1:eye_y2, eye_x1:eye_x2]
-                            if eye_crop.size > 0:
-                                zoomed = cv2.resize(eye_crop, (img.shape[1], img.shape[0]), interpolation=cv2.INTER_LINEAR)
-                                cv2.putText(zoomed, "Eye Track & Zoom (Phone)", (20, 40), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
-                                _, buf = cv2.imencode('.jpg', zoomed, [cv2.IMWRITE_JPEG_QUALITY, 65])
-                                frame = buf.tobytes()
-                            break
-            except Exception as e:
-                pass # fall back to original frame
-                
             if not live:
                 live = True
                 try:
@@ -1531,14 +1542,103 @@ class JarvisLive:
                     self.ui.write_log("SYS: Phone camera live on PC HUD.")
                 except Exception:
                     pass
+            self._last_frame = frame          # newest frame, for face enrolment
             try:
                 self.ui.show_phone_cam_frame(frame)
             except Exception:
                 pass
+
+            # ── FAST PATH: local person tracking (skeleton + aura).
+            #    Capped at ~30 Hz: the HUD interpolates/animates at 60 FPS on
+            #    top of these results, and tracking every single frame would
+            #    steal CPU from the render loop and drop the display below 60.
+            if (now_t := time.monotonic()) - last_trk >= 0.033 and (
+                    trk_task is None or trk_task.done()):
+                last_trk = now_t
+                trk_task = asyncio.create_task(self._live_track_task(frame))
+
+            # ── SLOW PATH: Gemini labels/objects, refreshed occasionally.
             now = time.monotonic()
-            if now - last_det >= 1.4 and (det_task is None or det_task.done()):
+            if now - last_det >= 2.5 and (det_task is None or det_task.done()):
                 last_det = now
                 det_task = asyncio.create_task(self._live_detect_task(frame))
+
+    async def _live_track_task(self, frame: bytes) -> None:
+        """Local, real-time person tracking for the live HUD overlay.
+
+        Fully isolated: any failure here must never interrupt the video feed
+        or take the application down.
+        """
+        try:
+            from actions.pose_tracker import track_people
+            people = await asyncio.wait_for(
+                asyncio.to_thread(track_people, frame), timeout=5.0
+            )
+        except asyncio.TimeoutError:
+            print("[Dashboard] Local tracking timed out — skipping frame")
+            return
+        except BaseException as e:
+            print(f"[Dashboard] Local tracking failed: {e}")
+            return
+
+        # Face detection + identity, also fully local and per-frame.
+        # The pose worker already returns 478-point face meshes when its model
+        # is available; those are richer (they carry the wireframe), so they
+        # win. face_id then only has to answer "who is this?".
+        mesh_faces = [d for d in people if d.get("kind") == "face"]
+        people = [d for d in people if d.get("kind") != "face"]
+        faces = []
+        try:
+            from actions.face_id import detect_faces, identify_box
+            if mesh_faces:
+                faces = mesh_faces
+                # attach identities to the meshes we already have
+                await asyncio.to_thread(identify_box, frame, faces)
+            else:
+                faces = await asyncio.wait_for(
+                    asyncio.to_thread(detect_faces, frame), timeout=5.0
+                )
+        except asyncio.TimeoutError:
+            pass
+        except BaseException as e:
+            print(f"[Dashboard] Face detection failed: {e}")
+        if not self._dashboard._cam_stream_active:
+            return
+        # Reuse the newest Gemini label for a person, if we have one, so the
+        # box still reads e.g. "PERSON — BLUE HEADPHONES" instead of "TRACKED".
+        labels = [d for d in (getattr(self, "_live_labels", None) or [])
+                  if d.get("kind") == "person"]
+        for i, p in enumerate(people):
+            if i < len(labels):
+                p["label"]  = labels[i].get("label")  or p["label"]
+                p["detail"] = labels[i].get("detail") or p["detail"]
+        # Non-person Gemini findings (objects/vehicles) stay on screen too.
+        extras = [d for d in (getattr(self, "_live_labels", None) or [])
+                  if d.get("kind") != "person"]
+        # A recognised face is the strongest identity signal we have — promote
+        # the name onto the person box that contains it.
+        for f in faces:
+            if not f.get("known"):
+                continue
+            fy0, fx0, fy1, fx1 = f["box"]
+            fcy, fcx = (fy0 + fy1) / 2, (fx0 + fx1) / 2
+            for p in people:
+                py0, px0, py1, px1 = p["box"]
+                if py0 <= fcy <= py1 and px0 <= fcx <= px1:
+                    p["label"] = f["label"].replace("FACE — ", "PERSON — ")
+                    p["detail"] = f["detail"]
+                    break
+        dets = people + faces + extras
+        try:
+            self.ui.show_phone_cam_dets(dets)
+        except Exception:
+            pass
+        try:
+            await self._dashboard.broadcast(
+                {"type": "live_dets", "detections": dets}
+            )
+        except Exception:
+            pass
 
     async def _live_detect_task(self, frame: bytes) -> None:
         """One background detection pass over the freshest live frame."""
@@ -1550,11 +1650,25 @@ class JarvisLive:
             return
         if not dets or not self._dashboard._cam_stream_active:
             return  # stream stopped while the model was thinking
+        self._live_labels = dets
+        # If local tracking is unavailable, the cloud result drives the HUD
+        # directly (previous behaviour).
+        try:
+            from actions.pose_tracker import get_tracker
+            if get_tracker().available():
+                return
+        except Exception:
+            pass
         try:
             self.ui.show_phone_cam_dets(dets)
         except Exception:
             pass
-        await self._dashboard.broadcast({"type": "live_dets", "detections": dets})
+        try:
+            await self._dashboard.broadcast(
+                {"type": "live_dets", "detections": dets}
+            )
+        except Exception:
+            pass
 
     # ── dashboard command relay ─────────────────────────────────────────────
 
@@ -1729,7 +1843,34 @@ class JarvisLive:
             print(f"[JARVIS] Reconnecting in {delay}s...")
             await asyncio.sleep(delay)
 
+def _install_crash_guard() -> None:
+    """Keep the window alive if a stray exception escapes a Qt slot or thread.
+
+    Without this, any unhandled error inside a Qt callback tears the whole
+    application down with no message — the app just vanishes.
+    """
+    import traceback
+
+    def _hook(exc_type, exc, tb):
+        if issubclass(exc_type, KeyboardInterrupt):
+            sys.__excepthook__(exc_type, exc, tb)
+            return
+        print("=" * 60)
+        print("[JARVIS] Unhandled exception (app kept alive):")
+        traceback.print_exception(exc_type, exc, tb)
+        print("=" * 60)
+
+    sys.excepthook = _hook
+    try:
+        threading.excepthook = lambda a: _hook(
+            a.exc_type, a.exc_value, a.exc_traceback
+        )
+    except Exception:
+        pass
+
+
 def main():
+    _install_crash_guard()
     ui = JarvisUI("face.png")
 
     def runner():
@@ -1741,7 +1882,15 @@ def main():
             print("\n🔴 Shutting down...")
 
     threading.Thread(target=runner, daemon=True).start()
-    ui.root.mainloop()
+    try:
+        ui.root.mainloop()
+    finally:
+        # make sure the isolated pose worker never outlives the UI
+        try:
+            from actions.pose_tracker import get_tracker
+            get_tracker().shutdown()
+        except Exception:
+            pass
 
 if __name__ == "__main__":
     main()
