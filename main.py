@@ -1520,11 +1520,20 @@ class JarvisLive:
                 det_task = asyncio.create_task(self._live_detect_task(frame))
 
     async def _live_track_task(self, frame: bytes) -> None:
-        """Local, real-time person tracking for the live HUD overlay."""
+        """Local, real-time person tracking for the live HUD overlay.
+
+        Fully isolated: any failure here must never interrupt the video feed
+        or take the application down.
+        """
         try:
             from actions.pose_tracker import track_people
-            people = await asyncio.to_thread(track_people, frame)
-        except Exception as e:
+            people = await asyncio.wait_for(
+                asyncio.to_thread(track_people, frame), timeout=5.0
+            )
+        except asyncio.TimeoutError:
+            print("[Dashboard] Local tracking timed out — skipping frame")
+            return
+        except BaseException as e:
             print(f"[Dashboard] Local tracking failed: {e}")
             return
         if not self._dashboard._cam_stream_active:
@@ -1545,7 +1554,12 @@ class JarvisLive:
             self.ui.show_phone_cam_dets(dets)
         except Exception:
             pass
-        await self._dashboard.broadcast({"type": "live_dets", "detections": dets})
+        try:
+            await self._dashboard.broadcast(
+                {"type": "live_dets", "detections": dets}
+            )
+        except Exception:
+            pass
 
     async def _live_detect_task(self, frame: bytes) -> None:
         """One background detection pass over the freshest live frame."""
@@ -1570,7 +1584,12 @@ class JarvisLive:
             self.ui.show_phone_cam_dets(dets)
         except Exception:
             pass
-        await self._dashboard.broadcast({"type": "live_dets", "detections": dets})
+        try:
+            await self._dashboard.broadcast(
+                {"type": "live_dets", "detections": dets}
+            )
+        except Exception:
+            pass
 
     # ── dashboard command relay ─────────────────────────────────────────────
 
@@ -1745,7 +1764,34 @@ class JarvisLive:
             print(f"[JARVIS] Reconnecting in {delay}s...")
             await asyncio.sleep(delay)
 
+def _install_crash_guard() -> None:
+    """Keep the window alive if a stray exception escapes a Qt slot or thread.
+
+    Without this, any unhandled error inside a Qt callback tears the whole
+    application down with no message — the app just vanishes.
+    """
+    import traceback
+
+    def _hook(exc_type, exc, tb):
+        if issubclass(exc_type, KeyboardInterrupt):
+            sys.__excepthook__(exc_type, exc, tb)
+            return
+        print("=" * 60)
+        print("[JARVIS] Unhandled exception (app kept alive):")
+        traceback.print_exception(exc_type, exc, tb)
+        print("=" * 60)
+
+    sys.excepthook = _hook
+    try:
+        threading.excepthook = lambda a: _hook(
+            a.exc_type, a.exc_value, a.exc_traceback
+        )
+    except Exception:
+        pass
+
+
 def main():
+    _install_crash_guard()
     ui = JarvisUI("face.png")
 
     def runner():

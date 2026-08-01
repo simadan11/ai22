@@ -2258,7 +2258,10 @@ class MainWindow(QMainWindow):
         pulse = 0.5 + 0.5 * math.sin(ph * 2 * math.pi)
 
         def _pt(q):
-            return QPointF(q[1] / 1000.0 * sw, q[0] / 1000.0 * sh)
+            y, x = float(q[0]), float(q[1])
+            if y != y or x != x:                     # NaN
+                raise ValueError("nan point")
+            return QPointF(x / 1000.0 * sw, y / 1000.0 * sh)
 
         # ── 1) silhouette outline (falls back to the bounding box) ─────────
         outline = d.get("outline") or []
@@ -2268,7 +2271,7 @@ class MainWindow(QMainWindow):
             for q in outline[:40]:
                 if isinstance(q, (list, tuple)) and len(q) >= 2:
                     try:
-                        pts.append(_pt([float(q[0]), float(q[1])]))
+                        pts.append(_pt(q))
                     except (TypeError, ValueError):
                         pass
             if len(pts) >= 4:
@@ -2305,7 +2308,7 @@ class MainWindow(QMainWindow):
             for k, q in pose.items():
                 if isinstance(q, (list, tuple)) and len(q) >= 2:
                     try:
-                        joints[str(k)] = _pt([float(q[0]), float(q[1])])
+                        joints[str(k)] = _pt(q)
                     except (TypeError, ValueError):
                         pass
         if len(joints) < 3:
@@ -2383,13 +2386,17 @@ class MainWindow(QMainWindow):
                 "object":  QColor("#00d4ff"),
             }
         sw, sh = px2.width(), px2.height()
+        if sw <= 0 or sh <= 0:
+            return
         p = QPainter(px2)
         try:
             p.setRenderHint(QPainter.RenderHint.Antialiasing)
             p.setFont(QFont("Courier New", 8, QFont.Weight.Bold))
             for d in (detections or [])[:12]:
+                if not isinstance(d, dict):
+                    continue
                 box = d.get("box") or []
-                if len(box) != 4:
+                if not isinstance(box, (list, tuple)) or len(box) != 4:
                     continue
                 try:
                     ymin, xmin, ymax, xmax = (
@@ -2397,6 +2404,8 @@ class MainWindow(QMainWindow):
                     )
                 except (TypeError, ValueError):
                     continue
+                if not all(v == v for v in (ymin, xmin, ymax, xmax)):
+                    continue                      # NaN guard
                 if xmax - xmin < 5 or ymax - ymin < 5:
                     continue
                 kind = d.get("kind")
@@ -2408,7 +2417,12 @@ class MainWindow(QMainWindow):
 
                 if kind == "person":
                     # full EDITH treatment: aura outline + bones + brackets
-                    self._draw_person_fx(p, d, sw, sh, x, y, bw, bh)
+                    try:
+                        self._draw_person_fx(p, d, sw, sh, x, y, bw, bh)
+                    except Exception:
+                        p.setPen(QPen(col, 2))
+                        p.setBrush(Qt.BrushStyle.NoBrush)
+                        p.drawRect(x, y, bw, bh)
                 else:
                     pen = QPen(col)
                     pen.setWidth(2)
@@ -2426,6 +2440,8 @@ class MainWindow(QMainWindow):
                 p.setPen(QPen(QColor("#04070c")))
                 p.drawText(QRectF(x + 5, ly, tw - 8, th),
                            Qt.AlignmentFlag.AlignVCenter, label)
+        except Exception as e:
+            print(f"[HUD] overlay paint failed: {e}")
         finally:
             p.end()
 

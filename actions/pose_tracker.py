@@ -67,16 +67,25 @@ def _ensure_model() -> Path | None:
     if p.exists() and p.stat().st_size > 1000:
         return p
     for url in _MODEL_URLS:
+        tmp = p.with_suffix(".part")
         try:
-            tmp = p.with_suffix(".part")
-            urllib.request.urlretrieve(url, tmp)          # noqa: S310
-            if tmp.stat().st_size > 1000:
+            print("[PoseTracker] Downloading pose model (one time, ~6 MB)…")
+            # NB: a bare urlretrieve() has no timeout and can hang the app
+            # forever on a dead network — always bound it.
+            with urllib.request.urlopen(url, timeout=20) as r:   # noqa: S310
+                data = r.read()
+            if len(data) > 1000:
+                tmp.write_bytes(data)
                 tmp.replace(p)
-                print(f"[PoseTracker] Model downloaded → {p.name}")
+                print(f"[PoseTracker] Model ready → {p.name}")
                 return p
-            tmp.unlink(missing_ok=True)
-        except Exception:
-            continue
+        except Exception as e:
+            print(f"[PoseTracker] Model download failed: {e}")
+        finally:
+            try:
+                tmp.unlink(missing_ok=True)
+            except Exception:
+                pass
     return None
 
 
@@ -93,6 +102,8 @@ class PoseTracker:
         self._cv2 = None
         self._last_err = ""
         self._smooth: dict = {}    # exponential smoothing state
+        self._last_ts = 0          # strictly-increasing MediaPipe timestamp
+        self._fails = 0            # consecutive backend failures
 
     # ── availability ────────────────────────────────────────────────────
     @property
@@ -109,6 +120,14 @@ class PoseTracker:
         with self._lock:
             if self._mode != "init":
                 return
+            try:
+                self._init_backend()
+            except BaseException as e:       # absolutely never propagate
+                self._mode = "off"
+                print(f"[PoseTracker] Init crashed, disabled — {e}")
+
+    def _init_backend(self) -> None:
+        if True:  # keeps the original indentation of the init block
             # numpy + cv2 are needed by both backends
             try:
                 import numpy as np
@@ -188,11 +207,44 @@ class PoseTracker:
                 bgr = cv2.resize(bgr, (640, max(1, int(h * sc))),
                                  interpolation=cv2.INTER_AREA)
             if self._mode == "mediapipe":
-                return self._track_mediapipe(bgr)
-            return self._track_hog(bgr)
-        except Exception as e:
-            print(f"[PoseTracker] track failed: {e}")
+                out = self._track_mediapipe(bgr)
+            else:
+                out = self._track_hog(bgr)
+            self._fails = 0
+            return out
+        except BaseException as e:      # never let a backend kill the app
+            self._fails += 1
+            print(f"[PoseTracker] track failed ({self._fails}): {e}")
+            if self._fails >= 5:
+                self._degrade()
             return []
+
+    def _degrade(self) -> None:
+        """A backend misbehaved repeatedly — drop to the next safest one."""
+        with self._lock:
+            if self._mode == "mediapipe":
+                try:
+                    if self._mp is not None:
+                        self._mp.close()
+                except Exception:
+                    pass
+                self._mp = None
+                try:
+                    hog = self._cv2.HOGDescriptor()
+                    hog.setSVMDetector(
+                        self._cv2.HOGDescriptor_getDefaultPeopleDetector()
+                    )
+                    self._hog = hog
+                    self._mode = "hog"
+                    print("[PoseTracker] MediaPipe unstable → switched to HOG")
+                except Exception:
+                    self._mode = "off"
+                    print("[PoseTracker] Disabled after repeated failures")
+            else:
+                self._mode = "off"
+                print("[PoseTracker] Disabled after repeated failures")
+            self._fails = 0
+            self._smooth.clear()
 
     def reset(self) -> None:
         """Clear smoothing state (call when the stream stops)."""
@@ -205,9 +257,17 @@ class PoseTracker:
 
         h, w = bgr.shape[:2]
         rgb = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
+        # MediaPipe keeps a reference to the buffer — hand it a private,
+        # contiguous copy so nothing mutates underneath the native code.
+        rgb = np.ascontiguousarray(rgb, dtype=np.uint8)
         image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb)
-        ts = int(time.monotonic() * 1000)
+
+        # CRITICAL: VIDEO mode aborts the *process* if timestamps are not
+        # strictly increasing, and the landmarker is not thread-safe. Both are
+        # guaranteed here by the lock + monotonic counter.
         with self._lock:
+            ts = max(int(time.monotonic() * 1000), self._last_ts + 1)
+            self._last_ts = ts
             res = self._mp.detect_for_video(image, ts)
 
         out: list[dict] = []
