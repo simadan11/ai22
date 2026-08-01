@@ -49,6 +49,8 @@ from actions.file_controller   import file_controller
 from actions.code_helper       import code_helper
 from actions.dev_agent         import dev_agent
 from actions.web_search        import web_search as web_search_action
+from actions.osint_lookup      import osint_lookup
+from actions.network_scanner   import network_scanner
 from actions.computer_control  import computer_control
 from actions.game_updater      import game_updater
 from actions.system_monitor    import SystemMonitor, get_system_status
@@ -545,6 +547,37 @@ TOOL_DECLARATIONS = [
             "required": ["category", "key", "value"]
         }
     },
+    {
+        "name": "osint_lookup",
+        "description": (
+            "Public OSINT lookup for IP addresses, domains, and open-source queries. "
+            "Use for: checking IP geo/ISP info, domain RDAP details, or general public-data search. "
+            "Only queries publicly available data — no private access. Modes: ip | domain | search."
+        ),
+        "parameters": {
+            "type": "OBJECT",
+            "properties": {
+                "target": {"type": "STRING", "description": "IP, domain, or search query"},
+                "mode":   {"type": "STRING", "description": "ip | domain | search (default: ip)"}
+            },
+            "required": ["target"]
+        }
+    },
+    {
+        "name": "network_scanner",
+        "description": (
+            "Scans nearby WiFi access points and Bluetooth Low Energy (BLE) devices that emit signals. "
+            "Use ONLY for authorized audit of your own network/devices. Never for tracking others. "
+            "Modes: wifi | ble | all (default: all). Returns discovered SSIDs / BLE device names with signal info."
+        ),
+        "parameters": {
+            "type": "OBJECT",
+            "properties": {
+                "type": {"type": "STRING", "description": "wifi | ble | all (default: all)"}
+            },
+            "required": []
+        }
+    },
 ]
 
 # --- Plugin system ---
@@ -853,6 +886,14 @@ class JarvisLive:
                     result = ("Monitoring: " + ", ".join(topics)) if topics else "No topics are being monitored."
                 else:
                     result = "Specify action (add/remove/list) and a topic."
+
+            elif name == "osint_lookup":
+                r = await loop.run_in_executor(None, lambda: osint_lookup(parameters=args, player=self.ui))
+                result = r or "Done."
+
+            elif name == "network_scanner":
+                r = await loop.run_in_executor(None, lambda: network_scanner(parameters=args, player=self.ui))
+                result = r or "Done."
 
             elif name == "shutdown_jarvis":
                 self.ui.write_log("SYS: Shutdown requested.")
