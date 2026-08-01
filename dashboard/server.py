@@ -365,6 +365,20 @@ def _read(name: str) -> str:
     return (STATIC_DIR / name).read_text(encoding="utf-8")
 
 
+def _device_name(agent: str) -> str:
+    """Short human label for a User-Agent string."""
+    a = (agent or "").lower()
+    for needle, name in (
+        ("iphone", "iPhone"), ("ipad", "iPad"), ("android", "Android"),
+        ("windows phone", "Windows Phone"), ("windows", "Windows PC"),
+        ("macintosh", "Mac"), ("mac os", "Mac"), ("cros", "Chromebook"),
+        ("linux", "Linux"),
+    ):
+        if needle in a:
+            return name
+    return "Device"
+
+
 # ── Phone camera — EDITH-style HUD detection ──────────────────────────────────
 
 _HUD_MODEL = "gemini-2.5-flash"
@@ -477,6 +491,7 @@ class DashboardServer:
         self._token_keys: dict[str, str]  = {}   # auth_token → session_key
         self._aes_cache:  dict[str, bytes]= {}   # session_key → AES bytes
         self._clients: set[WebSocket]     = set()
+        self._client_info: dict[str, dict] = {}   # dev_id → {ws, ip, name, since}
         self._history: list[dict]         = []
         self._command_queue               = asyncio.Queue()
         self._wake_callback               = None
@@ -564,9 +579,11 @@ class DashboardServer:
     # ── broadcast ────────────────────────────────────────────────────────
 
     async def broadcast(self, msg: dict) -> None:
-        self._history.append(msg)
-        if len(self._history) > 300:
-            self._history = self._history[-300:]
+        # transient pings are not replayed to freshly reconnecting phones
+        if msg.get("type") not in ("devices", "vision_status"):
+            self._history.append(msg)
+            if len(self._history) > 300:
+                self._history = self._history[-300:]
         dead: set[WebSocket] = set()
         for ws in list(self._clients):
             try:
@@ -574,6 +591,47 @@ class DashboardServer:
             except Exception:
                 dead.add(ws)
         self._clients -= dead
+        if dead:
+            dropped = {id(ws) for ws in dead}
+            self._client_info = {
+                k: v for k, v in self._client_info.items()
+                if id(v.get("ws")) not in dropped
+            }
+
+    # ── device management ────────────────────────────────────────────────
+
+    def devices_info(self) -> list[dict]:
+        """Snapshot of remotes on the live /ws socket — for the PC hub & phone hub."""
+        now = time.time()
+        return [
+            {
+                "id":   did,
+                "name": info["name"],
+                "ip":   info["ip"],
+                "secs": int(now - info["since"]),
+            }
+            for did, info in list(self._client_info.items())
+        ]
+
+    def revoke_all_paired(self) -> int:
+        n = len(self._device_sessions)
+        self._device_sessions.clear()
+        return n
+
+    async def disconnect_device(self, dev_id: str) -> bool:
+        """Kick one connected remote off the /ws socket."""
+        info = self._client_info.pop(dev_id, None)
+        if not info:
+            return False
+        ws = info.get("ws")
+        if ws is not None:
+            self._clients.discard(ws)
+            try:
+                await ws.close(code=4000)
+            except Exception:
+                pass
+        await self.broadcast({"type": "devices", "count": len(self._clients)})
+        return True
 
     # ── FastAPI app ───────────────────────────────────────────────────────
 
@@ -705,6 +763,28 @@ class DashboardServer:
             count = len(self._device_sessions)
             self._device_sessions.clear()
             return JSONResponse({"ok": True, "revoked": count})
+
+        @app.get("/api/devices")
+        async def list_devices(req: Request):
+            """Who is live on the /ws socket right now (+ how many paired devices)."""
+            if not _auth(req):
+                return JSONResponse({"error": "Unauthorized"}, status_code=401)
+            return JSONResponse({
+                "devices": self.devices_info(),
+                "paired":  len(self._device_sessions),
+            })
+
+        @app.post("/api/disconnect")
+        async def disconnect_ep(req: Request):
+            """Kick one connected remote (hub action)."""
+            if not _auth(req):
+                return JSONResponse({"error": "Unauthorized"}, status_code=401)
+            try:
+                body = await req.json()
+            except Exception:
+                body = {}
+            ok = await self.disconnect_device(str((body or {}).get("id") or ""))
+            return JSONResponse({"ok": ok})
 
         @app.post("/api/command")
         async def command(req: Request):
@@ -928,6 +1008,20 @@ class DashboardServer:
                 return
             await websocket.accept()
             self._clients.add(websocket)
+            dev_id = secrets.token_hex(4)
+            try:
+                ip = websocket.client.host if websocket.client else "?"
+            except Exception:
+                ip = "?"
+            self._client_info[dev_id] = {
+                "ws":   websocket,
+                "ip":   ip,
+                "name": _device_name(websocket.headers.get("user-agent", "")),
+                "since": time.time(),
+            }
+            asyncio.create_task(self.broadcast(
+                {"type": "devices", "count": len(self._clients)}
+            ))
             for entry in self._history[-50:]:
                 try:
                     await websocket.send_json(entry)
@@ -947,6 +1041,10 @@ class DashboardServer:
                 pass
             finally:
                 self._clients.discard(websocket)
+                self._client_info.pop(dev_id, None)
+                asyncio.create_task(self.broadcast(
+                    {"type": "devices", "count": len(self._clients)}
+                ))
 
         return app
 

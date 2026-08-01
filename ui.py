@@ -1499,11 +1499,12 @@ class ClipboardPanel(QWidget):
 
 
 class RemoteKeyOverlay(QWidget):
-    """Floating overlay — QR code for instant phone pairing + manual key fallback."""
+    """Floating overlay — QR code for instant phone pairing + manual key fallback
+    + management panel for every remote device currently connected."""
 
     closed = pyqtSignal()
 
-    _OW, _OH = 400, 465
+    _OW, _OH = 400, 640
 
     def __init__(self, url: str, key: str, auto_login_url: str = "",
                  manual_url: str = "", expiry_secs: int = 600, parent=None):
@@ -1621,6 +1622,41 @@ class RemoteKeyOverlay(QWidget):
         btn_row.addWidget(close_btn)
         lay.addLayout(btn_row)
 
+        # ── Connected devices (hub) ───────────────────────────────────────────
+        sep3 = QFrame(); sep3.setFrameShape(QFrame.Shape.HLine)
+        sep3.setStyleSheet(f"color: {C.BORDER}; margin: 1px 0;")
+        lay.addWidget(sep3)
+
+        self._dev_provider = None
+        self._dev_kicker   = None
+        self._dev_refresh_ctr = 0
+
+        self._dev_title = _lbl("◈  CONNECTED DEVICES — 0", 8, True,
+                               align=Qt.AlignmentFlag.AlignLeft)
+        lay.addWidget(self._dev_title)
+
+        self._dev_holder = QWidget()
+        self._dev_holder.setStyleSheet("background: transparent;")
+        self._dev_box = QVBoxLayout(self._dev_holder)
+        self._dev_box.setContentsMargins(0, 0, 0, 0)
+        self._dev_box.setSpacing(3)
+        lay.addWidget(self._dev_holder)
+
+        revoke_btn = QPushButton("REVOKE PAIRED DEVICES")
+        revoke_btn.setFixedHeight(26)
+        revoke_btn.setFont(QFont("Courier New", 7, QFont.Weight.Bold))
+        revoke_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        revoke_btn.setStyleSheet(f"""
+            QPushButton {{
+                background: transparent; color: {C.TEXT_MED};
+                border: 1px solid {C.BORDER}; border-radius: 5px;
+            }}
+            QPushButton:hover {{ color: #f87171; border: 1px solid #7f2d2d; }}
+        """)
+        revoke_btn.clicked.connect(self._revoke_paired)
+        lay.addWidget(revoke_btn)
+        self._revoke_btn = revoke_btn
+
         self._ctimer = QTimer(self)
         self._ctimer.timeout.connect(self._tick)
         self._ctimer.start(1000)
@@ -1628,6 +1664,78 @@ class RemoteKeyOverlay(QWidget):
 
     def set_new_key_callback(self, fn) -> None:
         self._on_new_key = fn
+
+    # ── Device hub ────────────────────────────────────────────────────────────
+
+    def set_devices_callbacks(self, provider, kicker) -> None:
+        """provider: () -> [{id,name,ip,secs}], kicker: (dev_id | 'revoke') -> None"""
+        self._dev_provider = provider
+        self._dev_kicker   = kicker
+        self.refresh_devices()
+
+    def refresh_devices(self) -> None:
+        # drop old rows
+        while self._dev_box.count():
+            item = self._dev_box.takeAt(0)
+            w = item.widget()
+            if w is not None:
+                w.deleteLater()
+
+        devs = []
+        if self._dev_provider:
+            try:
+                devs = self._dev_provider() or []
+            except Exception:
+                devs = []
+
+        self._dev_title.setText(f"◈  CONNECTED DEVICES — {len(devs)}")
+        if not devs:
+            msg = "scan the QR code with a phone…" if self._dev_provider else "dashboard offline"
+            lbl = QLabel(msg)
+            lbl.setFont(QFont("Courier New", 8))
+            lbl.setStyleSheet(f"color: {C.TEXT_DIM}; background: transparent;")
+            self._dev_box.addWidget(lbl)
+            return
+
+        for d in devs[:6]:
+            row = QWidget()
+            row.setStyleSheet("background: transparent;")
+            hl = QHBoxLayout(row)
+            hl.setContentsMargins(0, 0, 0, 0)
+            hl.setSpacing(6)
+            secs = int(d.get("secs", 0))
+            mm, ss = divmod(secs, 60)
+            txt = f"{d.get('name','Device')} · {d.get('ip','?')} · {mm:02d}:{ss:02d}"
+            lbl = QLabel(txt)
+            lbl.setFont(QFont("Courier New", 8))
+            lbl.setStyleSheet(f"color: {C.TEXT_MED}; background: transparent;")
+            kick = QPushButton("KICK")
+            kick.setFixedSize(46, 20)
+            kick.setFont(QFont("Courier New", 7, QFont.Weight.Bold))
+            kick.setCursor(Qt.CursorShape.PointingHandCursor)
+            kick.setStyleSheet(f"""
+                QPushButton {{
+                    background: transparent; color: {C.TEXT_DIM};
+                    border: 1px solid {C.BORDER}; border-radius: 4px;
+                }}
+                QPushButton:hover {{ color: #f87171; border: 1px solid #7f2d2d; }}
+            """)
+            kick.clicked.connect(lambda _c, did=str(d.get("id", "")): self._kick_device(did))
+            hl.addWidget(lbl, stretch=1)
+            hl.addWidget(kick)
+            self._dev_box.addWidget(row)
+
+    def _kick_device(self, dev_id: str) -> None:
+        if self._dev_kicker and dev_id:
+            self._dev_kicker(dev_id)
+        QTimer.singleShot(300, self.refresh_devices)
+
+    def _revoke_paired(self) -> None:
+        if self._dev_kicker:
+            self._dev_kicker("revoke")
+        self._revoke_btn.setText("PAIRED DEVICES REVOKED")
+        QTimer.singleShot(2000,
+                          lambda: self._revoke_btn.setText("REVOKE PAIRED DEVICES"))
 
     def _update_qr(self, url: str) -> None:
         if not url:
@@ -1671,6 +1779,11 @@ class RemoteKeyOverlay(QWidget):
         self._timer_lbl.setText(f"Key expires in  {m:02d}:{s:02d}")
         if remaining == 0:
             self._do_close()
+            return
+        # refresh the devices list every 5 s while the overlay is open
+        self._dev_refresh_ctr += 1
+        if self._dev_refresh_ctr % 5 == 0:
+            self.refresh_devices()
 
     def mark_connected(self) -> None:
         """Call from any thread when a phone successfully connects."""
@@ -1734,6 +1847,7 @@ class MainWindow(QMainWindow):
     _camera_sig     = pyqtSignal(bytes)      # show camera frame preview (small overlay)
     _cam_stream_sig = pyqtSignal(bool)       # True=start live stream, False=stop
     _cam_frame_sig  = pyqtSignal(bytes)      # live camera frame → HUD area
+    _scan_sig       = pyqtSignal(bytes, object)  # phone scan frame + detections → HUD area
     _clipboard_sig  = pyqtSignal(str)        # clipboard text changed (thread-safe)
 
     def __init__(self, face_path: str):
@@ -1812,7 +1926,7 @@ class MainWindow(QMainWindow):
             }}
             QPushButton:hover {{ color: {C.PRI}; }}
         """)
-        _cam_x.clicked.connect(self.stop_camera_stream)
+        _cam_x.clicked.connect(self._close_feed_view)
         _cam_hdr.addWidget(_cam_x)
         _cam_v.addLayout(_cam_hdr)
         self._cam_live_lbl = QLabel()
@@ -1875,8 +1989,12 @@ class MainWindow(QMainWindow):
         self._camera_sig.connect(self._show_camera_frame)
         self._cam_stream_sig.connect(self._on_cam_stream)
         self._cam_frame_sig.connect(self._on_cam_frame)
+        self._scan_sig.connect(self._on_phone_scan)
         self._clipboard_sig.connect(self._show_clipboard_panel)
         self._cam_stop = threading.Event()
+        self._feed_mode = "none"             # none | camera | scan — who owns the HUD area
+        self.devices_provider = None         # set by main.py: () -> list[dict]
+        self.devices_kicker   = None         # set by main.py: (dev_id | "revoke") -> None
 
         # Camera preview overlay (child of central widget, positioned in resizeEvent)
         self._cam_preview = _CameraPreview(self.centralWidget())
@@ -1910,15 +2028,21 @@ class MainWindow(QMainWindow):
             pw, ph,
         )
 
-    # --- Live camera stream in HUD area ------------------------------------
+    # --- Live camera stream / phone scan in HUD area -----------------------
     def _on_cam_stream(self, start: bool) -> None:
         if start:
+            self._feed_mode = "camera"
+            self._cam_title.setText("◈  CAMERA FEED")
             self._hud_cam_stack.setCurrentIndex(1)
         else:
+            self._feed_mode = "none"
+            self._cam_title.setText("◈  CAMERA FEED")
             self._hud_cam_stack.setCurrentIndex(0)
             self._cam_live_lbl.clear()
 
     def _on_cam_frame(self, data: bytes) -> None:
+        if self._feed_mode != "camera":
+            return  # a phone scan snapshot owns the area right now
         px = QPixmap()
         px.loadFromData(data)
         if not px.isNull():
@@ -1972,6 +2096,85 @@ class MainWindow(QMainWindow):
 
     def stop_camera_stream(self) -> None:
         self._cam_stop.set()
+        if self._feed_mode == "camera":
+            self._feed_mode = "none"
+        # the camera thread's finally-block emits _cam_stream_sig(False) → HUD restored
+
+    def _close_feed_view(self) -> None:
+        """✕ button in the feed header — closes webcam stream OR scan overlay."""
+        self._cam_stop.set()
+        self._feed_mode = "none"
+        self._cam_stream_sig.emit(False)
+
+    # --- Phone scan overlay (EDITH snapshot with detection boxes) ----------
+    def _on_phone_scan(self, img_bytes: bytes, detections) -> None:
+        """Slot (main thread): draw the phone's scanned frame + labeled boxes."""
+        px = QPixmap()
+        px.loadFromData(img_bytes)
+        if px.isNull():
+            return
+        self._feed_mode = "scan"
+        self._cam_title.setText("◈  PHONE SCAN — EDITH")
+        self._hud_cam_stack.setCurrentIndex(1)
+
+        w, h = self._cam_live_lbl.width(), self._cam_live_lbl.height()
+        if w <= 1 or h <= 1:
+            px2 = px
+        else:
+            px2 = px.scaled(
+                w, h,
+                Qt.AspectRatioMode.KeepAspectRatio,
+                Qt.TransformationMode.SmoothTransformation,
+            )
+        _COLORS = {
+            "person":  QColor("#f97316"),
+            "vehicle": QColor("#facc15"),
+            "object":  QColor("#00d4ff"),
+        }
+        sw, sh = px2.width(), px2.height()
+        p = QPainter(px2)
+        try:
+            p.setFont(QFont("Courier New", 8, QFont.Weight.Bold))
+            for d in (detections or [])[:12]:
+                box = d.get("box") or []
+                if len(box) != 4:
+                    continue
+                try:
+                    ymin, xmin, ymax, xmax = (
+                        max(0.0, min(1000.0, float(v))) for v in box
+                    )
+                except (TypeError, ValueError):
+                    continue
+                if xmax - xmin < 5 or ymax - ymin < 5:
+                    continue
+                col = _COLORS.get(d.get("kind"), _COLORS["object"])
+                pen = QPen(col)
+                pen.setWidth(2)
+                p.setPen(pen)
+                x  = int(xmin / 1000 * sw)
+                y  = int(ymin / 1000 * sh)
+                bw = int((xmax - xmin) / 1000 * sw)
+                bh = int((ymax - ymin) / 1000 * sh)
+                p.drawRect(x, y, bw, bh)
+                label = str(d.get("label") or "TARGET").upper()[:42]
+                fm    = p.fontMetrics()
+                tw    = min(fm.horizontalAdvance(label) + 10, sw)
+                th    = fm.height() + 4
+                ly    = y - th if y - th > 0 else y
+                p.fillRect(x, ly, tw, th, col)
+                p.setPen(QPen(QColor("#04070c")))
+                p.drawText(QRectF(x + 5, ly, tw - 8, th),
+                           Qt.AlignmentFlag.AlignVCenter, label)
+        finally:
+            p.end()
+        self._cam_live_lbl.setPixmap(px2)
+        QTimer.singleShot(20000, self._leave_scan)
+
+    def _leave_scan(self) -> None:
+        if self._feed_mode == "scan":
+            self._feed_mode = "none"
+            self._hud_cam_stack.setCurrentIndex(0)
+            self._cam_live_lbl.clear()
 
     # ------------------------------------------------------------------
     # Icon generation — arc-reactor style, rendered with Pillow
@@ -2921,6 +3124,10 @@ class MainWindow(QMainWindow):
         ov  = RemoteKeyOverlay(url, key, auto_login_url=auto, manual_url=manual,
                                expiry_secs=600, parent=cw)
         ov.set_new_key_callback(self.on_remote_clicked)
+        ov.set_devices_callbacks(
+            getattr(self, "devices_provider", None),
+            getattr(self, "devices_kicker", None),
+        )
         ov.setGeometry(
             (cw.width()  - ow) // 2,
             (cw.height() - oh) // 2,
@@ -3326,6 +3533,15 @@ class JarvisUI:
     def stop_camera_stream(self) -> None:
         """Thread-safe: stop the live camera feed."""
         self._win.stop_camera_stream()
+
+    def show_phone_scan(self, img_bytes: bytes, detections) -> None:
+        """Thread-safe: paint a phone-scanned frame + EDITH boxes onto the HUD area."""
+        self._win._scan_sig.emit(img_bytes, detections)
+
+    def set_device_callbacks(self, provider, kicker) -> None:
+        """Wire the Remote overlay's device hub to the dashboard (called by main.py)."""
+        self._win.devices_provider = provider
+        self._win.devices_kicker   = kicker
 
     @property
     def assistant_name(self) -> str:

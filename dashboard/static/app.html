@@ -50,12 +50,51 @@
     .enc-badge.on  { display: block; background: rgba(34,197,94,0.1); border: 1px solid rgba(34,197,94,0.25); color: var(--green); }
     .enc-badge.off { display: block; background: rgba(255,100,100,0.08); border: 1px solid rgba(255,100,100,0.2); color: #f87171; }
     .url { font-size: 10px; font-family: monospace; color: var(--muted); padding: 4px 9px; background: var(--surface); border: 1px solid var(--border); border-radius: 6px; }
-    #spk-btn {
+    #spk-btn, #dev-btn {
       background: var(--surface); border: 1px solid var(--border); color: var(--text);
       padding: 4px 9px; font-size: 13px; border-radius: 6px; cursor: pointer; line-height: 1.25;
     }
-    #spk-btn:active { transform: scale(0.95); }
+    #spk-btn:active, #dev-btn:active { transform: scale(0.95); }
     #spk-btn.muted  { opacity: 0.45; }
+    #dev-btn #dev-count { font-size: 10px; font-weight: 700; color: var(--green); }
+
+    /* ── DEVICES HUB PANEL ── */
+    #dev-panel {
+      position: fixed; top: 54px; right: 10px; z-index: 220;
+      width: min(310px, 88vw); display: none;
+      background: rgba(7,10,16,0.97); border: 1px solid var(--border);
+      border-radius: 12px; padding: 12px 14px;
+      box-shadow: 0 10px 40px rgba(0,0,0,0.6);
+      font-family: 'SFMono-Regular', Consolas, monospace;
+    }
+    #dev-panel.open { display: block; animation: pop 0.18s ease; }
+    .dp-title { font-size: 10px; font-weight: 800; letter-spacing: 2px; color: var(--accent); margin-bottom: 8px; }
+    .dp-empty { font-size: 11px; color: var(--muted); padding: 6px 0; }
+    .dp-row {
+      display: flex; align-items: center; gap: 8px; padding: 6px 8px;
+      background: var(--surface); border: 1px solid var(--border); border-radius: 8px;
+      margin-bottom: 6px; font-size: 11px;
+    }
+    .dp-meta { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .dp-meta b { color: var(--text); font-weight: 700; }
+    .dp-meta i { color: var(--muted); font-style: normal; font-size: 10px; }
+    .dp-kick {
+      flex-shrink: 0; background: transparent; color: var(--muted);
+      border: 1px solid var(--border); border-radius: 5px;
+      font-size: 9px; font-weight: 800; letter-spacing: 1px;
+      padding: 3px 8px; cursor: pointer; font-family: inherit;
+    }
+    .dp-kick:hover { color: #f87171; border-color: #7f2d2d; }
+    .dp-paired {
+      display: flex; align-items: center; justify-content: space-between;
+      font-size: 10px; color: var(--muted); margin-top: 4px;
+    }
+    #dp-revoke {
+      background: transparent; color: #f87171; border: 1px solid #7f2d2d;
+      border-radius: 5px; font-size: 9px; font-weight: 800; letter-spacing: 1px;
+      padding: 4px 8px; cursor: pointer; font-family: inherit; opacity: 0.85;
+    }
+    #dp-revoke:hover { opacity: 1; }
 
     /* ── FEED ── */
     main { flex: 1; overflow-y: auto; padding: 14px 16px 8px; display: flex; flex-direction: column; gap: 10px; }
@@ -152,7 +191,11 @@
     .tag {
       position: absolute; border: 1.5px solid #22d3ee; border-radius: 3px;
       box-shadow: 0 0 12px rgba(34,211,238,0.25); animation: tag-pop .25s ease;
+      pointer-events: auto;
     }
+    .tag-info { cursor: pointer; }
+    .tag-info:hover { box-shadow: 0 0 18px rgba(34,211,238,0.6); }
+    .tag-info:active { transform: scale(0.98); }
     @keyframes tag-pop { from { opacity: 0; transform: scale(1.15); } }
     .tag-p { border-color: #f97316; box-shadow: 0 0 12px rgba(249,115,22,0.35); }
     .tag-v { border-color: #facc15; box-shadow: 0 0 12px rgba(250,204,21,0.35); }
@@ -252,9 +295,18 @@
     <div class="pill" id="pill"><span class="dot"></span><span id="st">Connecting</span></div>
     <div class="enc-badge" id="enc">AES-256</div>
     <div class="spacer"></div>
+    <button id="dev-btn" onclick="toggleDevPanel()" title="Connected devices hub">🛰 <span id="dev-count">0</span></button>
     <button id="spk-btn" onclick="toggleSpk()" title="JARVIS voice on this device">🔊</button>
     <div class="url">__IP__:__PORT__</div>
   </header>
+  <!-- ── Devices hub panel ───────────────────────────────────────────── -->
+  <div id="dev-panel">
+    <div class="dp-title">◈ DEVICES HUB</div>
+    <div id="dev-list"><div class="dp-empty">loading…</div></div>
+    <div class="dp-paired">paired devices: <span id="dp-paired-n">0</span>
+      <button id="dp-revoke" onclick="revokePaired()">REVOKE ALL</button>
+    </div>
+  </div>
   <main id="feed"></main>
   <footer>
     <input id="inp" placeholder="Send a command to JARVIS…" autocomplete="off">
@@ -357,6 +409,7 @@
       if (m.type === 'wake')          sys('Wake word detected — connecting…');
       if (m.type === 'sys')           sys(m.text);
       if (m.type === 'file_received') _onFileReceived(m);
+      if (m.type === 'devices')       _setDevCount(m.count);
       if (m.type === 'vision_status') sys(m.state === 'error' ? m.text : 'Phone camera: ' + m.state + '…');
       _onVisionMsg(m);
     };
@@ -571,18 +624,83 @@
         const src = ctx.createBufferSource();
         src.buffer = ab;
         src.connect(ctx.destination);
-        // fell >1.5 s behind (network hiccup) → resync instead of lagging
-        if (_spkNext - ctx.currentTime > 1.5 || _spkNext < ctx.currentTime)
-          _spkNext = ctx.currentTime + 0.05;
+        // fell >1.2 s behind (network hiccup) → resync instead of lagging
+        if (_spkNext - ctx.currentTime > 1.2 || _spkNext < ctx.currentTime)
+          _spkNext = ctx.currentTime + 0.15;   // 150 ms jitter cushion for LAN WiFi
         src.start(_spkNext);
         _spkNext += ab.duration;
       } catch (_) {}
+    }
+
+    // True while JARVIS audio is still queued on this phone's speaker —
+    // used to keep the phone mic from echoing JARVIS back to himself
+    function _spkActive() {
+      return !!(_spkCtx && _spkNext > _spkCtx.currentTime + 0.15);
     }
 
     // mobile browsers keep AudioContext suspended until the first user gesture
     document.addEventListener('pointerdown', () => {
       if (_spkCtx && _spkCtx.state === 'suspended') _spkCtx.resume();
     }, { passive: true });
+
+    // ── Devices hub panel ─────────────────────────────────────────────────────
+    function _setDevCount(n) {
+      const c = document.getElementById('dev-count');
+      if (c) c.textContent = (typeof n === 'number') ? n : 0;
+    }
+
+    function toggleDevPanel() {
+      const p = document.getElementById('dev-panel');
+      p.classList.toggle('open');
+      if (p.classList.contains('open')) loadDevices();
+    }
+
+    async function loadDevices() {
+      const list = document.getElementById('dev-list');
+      try {
+        const r = await _authFetch('/api/devices');
+        const d = await r.json();
+        document.getElementById('dp-paired-n').textContent = d.paired || 0;
+        _setDevCount((d.devices || []).length);
+        if (!d.devices || !d.devices.length) {
+          list.innerHTML = '<div class="dp-empty">no remotes connected</div>';
+          return;
+        }
+        list.innerHTML = '';
+        d.devices.forEach(dev => {
+          const mm = String(Math.floor((dev.secs || 0) / 60)).padStart(2, '0');
+          const ss = String((dev.secs || 0) % 60).padStart(2, '0');
+          const row = document.createElement('div');
+          row.className = 'dp-row';
+          row.innerHTML =
+            `<div class="dp-meta"><b>${esc(dev.name)}</b> · ${esc(dev.ip)} <i>· ${mm}:${ss}</i></div>` +
+            `<button class="dp-kick">KICK</button>`;
+          row.querySelector('.dp-kick').addEventListener('click', async () => {
+            await _authFetch('/api/disconnect', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ id: dev.id }),
+            });
+            toast('Device disconnected');
+            loadDevices();
+          });
+          list.appendChild(row);
+        });
+      } catch (_) {
+        list.innerHTML = '<div class="dp-empty">failed to load devices</div>';
+      }
+    }
+
+    async function revokePaired() {
+      try {
+        const r = await _authFetch('/api/revoke-devices', { method: 'POST' });
+        const d = await r.json();
+        document.getElementById('dp-paired-n').textContent = 0;
+        toast(`Revoked ${d.revoked || 0} paired device(s)`);
+      } catch (_) {
+        toast('Revoke failed');
+      }
+    }
 
     // ── Real-time Voice — PCM16 WebSocket → Gemini Live ──────────────────────
     const micBtn  = document.getElementById('mic-btn');
@@ -687,6 +805,7 @@
           // matches PC mic chunk size, prevents queue flooding on the server.
           let _pbuf = [], _plen = 0;
           nd.port.onmessage = e => {
+            if (_spkActive()) return;   // don't echo JARVIS's own voice back to him
             const chunk = new Int16Array(_f32toPcm16(e.data, rate));
             _pbuf.push(chunk); _plen += chunk.length;
             if (_plen >= 1024) {
@@ -702,6 +821,7 @@
           // ScriptProcessor fallback (deprecated, still works everywhere)
           const sp = ctx.createScriptProcessor(4096, 1, 1);
           sp.onaudioprocess = e => {
+            if (_spkActive()) return;   // don't echo JARVIS's own voice back to him
             if (ws.readyState === 1) ws.send(_f32toPcm16(e.inputBuffer.getChannelData(0), rate));
           };
           src.connect(sp); sp.connect(ctx.destination);
@@ -871,6 +991,13 @@
         const el = document.createElement('div');
         el.className = 'tag' +
           (d.kind === 'person' ? ' tag-p' : d.kind === 'vehicle' ? ' tag-v' : '');
+        // objects, vehicles, landmarks: tap → JARVIS looks it up & explains.
+        // people and plates are intentionally NOT searchable.
+        const _label = String(d.label || '');
+        if (d.kind !== 'person' && !/^PLATE\b/i.test(_label)) {
+          el.classList.add('tag-info');
+          el.addEventListener('click', () => _tagInfo(_label));
+        }
         el.style.left   = ((xmin / 1000) * dw - offX) + 'px';
         el.style.top    = ((ymin / 1000) * dh - offY) + 'px';
         el.style.width  = (((xmax - xmin) / 1000) * dw) + 'px';
@@ -898,6 +1025,23 @@
 
     window.addEventListener('resize', () => { if (_lastDets.length) _drawBoxes(); });
     camVideo.addEventListener('resize',  () => { if (_lastDets.length) _drawBoxes(); });
+
+    // ── Tap a tag → JARVIS searches & tells you about that thing ─────────────
+    function _tagInfo(label) {
+      const clean = label.replace(/\s+/g, ' ').trim().slice(0, 60);
+      if (!clean) return;
+      camStatus.textContent = 'LOOKUP: ' + clean.toUpperCase();
+      toast('🔎 ' + clean);
+      const q = `The user tapped the "${clean}" annotation on their phone camera HUD. ` +
+                `Briefly explain what "${clean}" is — search the web if it is a specific ` +
+                `product or place. One or two sentences.`;
+      const enc = _encrypt(q);
+      _authFetch('/api/command', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(enc ? { enc } : { text: q }),
+      });
+    }
 
     function _onVisionMsg(m) {
       if (!camOverlay.classList.contains('open')) return;

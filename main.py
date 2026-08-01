@@ -1444,9 +1444,23 @@ class JarvisLive:
                         "text": f"📷 {question}",
                         "ts": datetime.now().isoformat(),
                     })
+                # EDITH snapshot with labeled boxes on the PC screen too
+                asyncio.create_task(self._pc_scan_overlay(frame))
             except Exception as e:
                 print(f"[Dashboard] Vision relay error: {e}")
                 await asyncio.sleep(0.5)
+
+    async def _pc_scan_overlay(self, frame: bytes) -> None:
+        """Detect people/vehicles/objects in the phone's frame and paint the
+        labeled snapshot onto the PC window's HUD area."""
+        try:
+            from dashboard.server import _edith_detect
+            dets = await asyncio.to_thread(_edith_detect, frame)
+            if dets and hasattr(self.ui, "show_phone_scan"):
+                self.ui.show_phone_scan(frame, dets)
+                print(f"[Dashboard] 🖥️  Scan overlay: {len(dets)} target(s) on PC HUD")
+        except Exception as e:
+            print(f"[Dashboard] PC scan overlay failed: {e}")
 
     # ── dashboard command relay ─────────────────────────────────────────────
 
@@ -1488,6 +1502,19 @@ class JarvisLive:
             self._dashboard = DashboardServer()
             self._dashboard.set_connect_callback(self._on_phone_connected)
             asyncio.create_task(self._dashboard.serve())
+            # Wire the Remote overlay's device hub (list + kick + revoke)
+            def _kick_device(did: str) -> None:
+                if not self._dashboard:
+                    return
+                if did == "revoke":
+                    n = self._dashboard.revoke_all_paired()
+                    self.ui.write_log(f"SYS: {n} paired device(s) revoked.")
+                    return
+                if self._loop:
+                    asyncio.run_coroutine_threadsafe(
+                        self._dashboard.disconnect_device(did), self._loop
+                    )
+            self.ui.set_device_callbacks(self._dashboard.devices_info, _kick_device)
             # Runs for the whole lifetime, not just inside an active session
             asyncio.create_task(self._process_dashboard_commands())
             asyncio.create_task(self._relay_phone_vision())

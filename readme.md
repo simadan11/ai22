@@ -60,7 +60,15 @@ The Remote Dashboard now turns your phone into JARVIS's eyes, Spider-Man style:
 2. Tap **📷** in the dashboard footer — a full-screen tactical HUD opens with your live camera feed (corner brackets, scanline, back/front camera toggle).
 3. Tap **SCAN** (optionally type a question like *"who is in the room?"* or *"what is on my desk?"*):
    - **HUD detection** — the server scans the frame and your phone draws labeled boxes over the live video: **people in orange** (`PERSON — RED JACKET, GLASSES`), **vehicles in yellow** (`CAR — WHITE BMW X5`, `PLATE — A123BC` when the plate text is legible), **objects in cyan** (`LAPTOP`, `CAR KEYS`, famous landmarks & products by their real names).
+   - **PC overlay** — the same labeled snapshot pops onto the PC window's HUD area for ~20 s, so you see on the big screen exactly what the phone saw.
+   - **Tap for info** — tap any object/vehicle/landmark tag on the phone and JARVIS looks it up and explains what it is (people and plates are intentionally not searchable).
    - **Voice answer** — the same frame is injected into the main Gemini Live session, so JARVIS speaks a concise tactical report out loud — both on the PC **and on the phone's speaker** (🔊 toggle in the dashboard header), with the transcript in the feed and on the HUD.
+
+### 🛰 Devices Hub — every remote under control
+- **On the PC** — open **Remote Control**; the overlay now lists every connected phone (device type, IP, session time) with a **KICK** button per device and **REVOKE PAIRED DEVICES**.
+- **On the phone** — the 🛰 chip in the header shows the live remote count and opens the same hub: see who is connected, kick a device, or revoke all saved pairings.
+
+> 🔊 **Voice notes:** JARVIS speaks on PC and phone simultaneously; if both are in the same room and you hear an echo, tap 🔇 on the phone or use headphones. While JARVIS's voice plays on the phone speaker, the phone mic is briefly suppressed so JARVIS never hears himself (that echo is what used to interrupt answers).
 
 > ⚠️ **Privacy by design:** people are described by appearance/clothing/pose only — the AI never identifies real people and never looks anyone up. License plates are transcribed as visible text only; there is intentionally **no owner lookup**. Camera access on `http://` origins needs the same one-time Chrome flag as the microphone (the app shows setup instructions automatically on first tap).
 
