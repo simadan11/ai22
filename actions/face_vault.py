@@ -78,13 +78,16 @@ def _get_cascade():
         if _cascade_tried:
             return _cascade
         _cascade_tried = True
-        # 1) bundled with the wheel
-        candidates = []
+        # 1) bundled inside this repo (next to face_vault.py) - always
+        #    available, works even if the opencv wheel lacks the cascade or
+        #    there is no network connection
+        this_dir = Path(__file__).resolve().parent
+        candidates = [this_dir / _HAAR_NAME]
         try:
-            candidates.append(Path(cv2.data.haarcascades) / _HAAR_NAME)
+            candidates.append(Path(cv2.data.haarcascades) / _HAAR_NAME)  # opencv wheel
         except Exception:
             pass
-        candidates.append(VAULT_DIR / _HAAR_NAME)      # downloaded fallback
+        candidates.append(VAULT_DIR / _HAAR_NAME)      # last-resort downloaded copy
         for path in candidates:
             try:
                 if path.exists():
