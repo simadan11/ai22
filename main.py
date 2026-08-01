@@ -1471,6 +1471,8 @@ class JarvisLive:
         live = False
         last_det = 0.0
         det_task = None
+        trk_task = None
+        self._live_labels: list = []      # newest Gemini labels (slow path)
         while True:
             try:
                 frame = await asyncio.wait_for(q.get(), timeout=0.8)
@@ -1478,6 +1480,12 @@ class JarvisLive:
                 if live:   # stream went quiet — hide the PC overlay
                     live = False
                     last_det = 0.0
+                    self._live_labels = []
+                    try:
+                        from actions.pose_tracker import get_tracker
+                        get_tracker().reset()
+                    except Exception:
+                        pass
                     try:
                         self.ui.stop_phone_cam()
                     except Exception:
@@ -1498,10 +1506,46 @@ class JarvisLive:
                 self.ui.show_phone_cam_frame(frame)
             except Exception:
                 pass
+
+            # ── FAST PATH: local per-frame person tracking (skeleton + aura).
+            #    Runs on every frame so the overlay sticks to the moving body
+            #    instead of waiting ~1.5 s for the cloud model.
+            if trk_task is None or trk_task.done():
+                trk_task = asyncio.create_task(self._live_track_task(frame))
+
+            # ── SLOW PATH: Gemini labels/objects, refreshed occasionally.
             now = time.monotonic()
-            if now - last_det >= 1.4 and (det_task is None or det_task.done()):
+            if now - last_det >= 2.5 and (det_task is None or det_task.done()):
                 last_det = now
                 det_task = asyncio.create_task(self._live_detect_task(frame))
+
+    async def _live_track_task(self, frame: bytes) -> None:
+        """Local, real-time person tracking for the live HUD overlay."""
+        try:
+            from actions.pose_tracker import track_people
+            people = await asyncio.to_thread(track_people, frame)
+        except Exception as e:
+            print(f"[Dashboard] Local tracking failed: {e}")
+            return
+        if not self._dashboard._cam_stream_active:
+            return
+        # Reuse the newest Gemini label for a person, if we have one, so the
+        # box still reads e.g. "PERSON — BLUE HEADPHONES" instead of "TRACKED".
+        labels = [d for d in (getattr(self, "_live_labels", None) or [])
+                  if d.get("kind") == "person"]
+        for i, p in enumerate(people):
+            if i < len(labels):
+                p["label"]  = labels[i].get("label")  or p["label"]
+                p["detail"] = labels[i].get("detail") or p["detail"]
+        # Non-person Gemini findings (objects/vehicles) stay on screen too.
+        extras = [d for d in (getattr(self, "_live_labels", None) or [])
+                  if d.get("kind") != "person"]
+        dets = people + extras
+        try:
+            self.ui.show_phone_cam_dets(dets)
+        except Exception:
+            pass
+        await self._dashboard.broadcast({"type": "live_dets", "detections": dets})
 
     async def _live_detect_task(self, frame: bytes) -> None:
         """One background detection pass over the freshest live frame."""
@@ -1513,6 +1557,15 @@ class JarvisLive:
             return
         if not dets or not self._dashboard._cam_stream_active:
             return  # stream stopped while the model was thinking
+        self._live_labels = dets
+        # If local tracking is unavailable, the cloud result drives the HUD
+        # directly (previous behaviour).
+        try:
+            from actions.pose_tracker import get_tracker
+            if get_tracker().available():
+                return
+        except Exception:
+            pass
         try:
             self.ui.show_phone_cam_dets(dets)
         except Exception:
