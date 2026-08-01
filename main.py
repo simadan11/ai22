@@ -51,6 +51,7 @@ from actions.dev_agent         import dev_agent
 from actions.web_search        import web_search as web_search_action
 from actions.osint_lookup      import osint_lookup
 from actions.network_scanner   import network_scanner
+from actions.install_on_phone  import install_on_phone
 from actions.computer_control  import computer_control
 from actions.game_updater      import game_updater
 from actions.system_monitor    import SystemMonitor, get_system_status
@@ -578,6 +579,21 @@ TOOL_DECLARATIONS = [
             "required": []
         }
     },
+    {
+        "name": "install_on_phone",
+        "description": (
+            "Installs an application on a connected Android phone via ADB or opens an APK/store URL in phone browser. "
+            "Use ONLY for authorized installation on YOUR device. Requires phone connection / ADB over WiFi or remote browser access."
+        ),
+        "parameters": {
+            "type": "OBJECT",
+            "properties": {
+                "app_source": {"type": "STRING", "description": "URL or local APK path"},
+                "method":     {"type": "STRING", "description": "adb | browser (default: adb)"}
+            },
+            "required": ["app_source"]
+        }
+    },
 ]
 
 # --- Plugin system ---
@@ -893,6 +909,10 @@ class JarvisLive:
 
             elif name == "network_scanner":
                 r = await loop.run_in_executor(None, lambda: network_scanner(parameters=args, player=self.ui))
+                result = r or "Done."
+
+            elif name == "install_on_phone":
+                r = await loop.run_in_executor(None, lambda: install_on_phone(parameters=args, player=self.ui))
                 result = r or "Done."
 
             elif name == "shutdown_jarvis":
