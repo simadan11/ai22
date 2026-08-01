@@ -61,6 +61,7 @@ The Remote Dashboard now turns your phone into JARVIS's eyes, Spider-Man style:
 3. Tap **SCAN** (optionally type a question like *"who is in the room?"* or *"what is on my desk?"*):
    - **HUD detection** — the server scans the frame and your phone draws labeled boxes over the live video: **people in orange** (`PERSON — RED JACKET, GLASSES`), **vehicles in yellow** (`CAR — WHITE BMW X5`, `PLATE — A123BC` when the plate text is legible), **objects in cyan** (`LAPTOP`, `CAR KEYS`, famous landmarks & products by their real names).
    - **PC overlay** — the same labeled snapshot pops onto the PC window's HUD area for ~20 s, so you see on the big screen exactly what the phone saw.
+   - **LIVE stream** — the **LIVE** toggle (~3 fps) streams the phone camera onto the PC main window in real time; a background detection pass repaints **person / vehicle / animal / object** boxes every ~1.5 s on *both* the PC window and the phone HUD. Tap **⏹** to stop.
    - **Tap for info** — tap any object/vehicle/landmark tag on the phone and JARVIS looks it up and explains what it is (people and plates are intentionally not searchable).
    - **Voice answer** — the same frame is injected into the main Gemini Live session, so JARVIS speaks a concise tactical report out loud — both on the PC **and on the phone's speaker** (🔊 toggle in the dashboard header), with the transcript in the feed and on the HUD.
 

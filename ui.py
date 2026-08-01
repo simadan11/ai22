@@ -1848,6 +1848,9 @@ class MainWindow(QMainWindow):
     _cam_stream_sig = pyqtSignal(bool)       # True=start live stream, False=stop
     _cam_frame_sig  = pyqtSignal(bytes)      # live camera frame → HUD area
     _scan_sig       = pyqtSignal(bytes, object)  # phone scan frame + detections → HUD area
+    _pcam_sig       = pyqtSignal(bool)           # phone live stream: True=start, False=stop
+    _pcam_frame_sig = pyqtSignal(bytes)          # phone live frame → HUD area
+    _pcam_dets_sig  = pyqtSignal(object)         # live detections for the current frame
     _clipboard_sig  = pyqtSignal(str)        # clipboard text changed (thread-safe)
 
     def __init__(self, face_path: str):
@@ -1990,9 +1993,14 @@ class MainWindow(QMainWindow):
         self._cam_stream_sig.connect(self._on_cam_stream)
         self._cam_frame_sig.connect(self._on_cam_frame)
         self._scan_sig.connect(self._on_phone_scan)
+        self._pcam_sig.connect(self._on_pcam_stream)
+        self._pcam_frame_sig.connect(self._on_pcam_frame)
+        self._pcam_dets_sig.connect(self._on_pcam_dets)
         self._clipboard_sig.connect(self._show_clipboard_panel)
         self._cam_stop = threading.Event()
-        self._feed_mode = "none"             # none | camera | scan — who owns the HUD area
+        self._feed_mode = "none"             # none | camera | scan | phonecam — who owns the HUD area
+        self._pcam_px   = None               # latest phone live frame (QPixmap)
+        self._pcam_dets: list = []           # latest live detections for that frame
         self.devices_provider = None         # set by main.py: () -> list[dict]
         self.devices_kicker   = None         # set by main.py: (dev_id | "revoke") -> None
 
@@ -2035,10 +2043,12 @@ class MainWindow(QMainWindow):
             self._cam_title.setText("◈  CAMERA FEED")
             self._hud_cam_stack.setCurrentIndex(1)
         else:
-            self._feed_mode = "none"
-            self._cam_title.setText("◈  CAMERA FEED")
-            self._hud_cam_stack.setCurrentIndex(0)
-            self._cam_live_lbl.clear()
+            # camera loop ended — only reclaim the area if no other feed owns it
+            if self._feed_mode in ("camera", "none"):
+                self._feed_mode = "none"
+                self._cam_title.setText("◈  CAMERA FEED")
+                self._hud_cam_stack.setCurrentIndex(0)
+                self._cam_live_lbl.clear()
 
     def _on_cam_frame(self, data: bytes) -> None:
         if self._feed_mode != "camera":
@@ -2101,10 +2111,106 @@ class MainWindow(QMainWindow):
         # the camera thread's finally-block emits _cam_stream_sig(False) → HUD restored
 
     def _close_feed_view(self) -> None:
-        """✕ button in the feed header — closes webcam stream OR scan overlay."""
+        """✕ button in the feed header — closes webcam stream / scan / phone live."""
         self._cam_stop.set()
         self._feed_mode = "none"
+        self._pcam_px = None
+        self._pcam_dets = []
         self._cam_stream_sig.emit(False)
+
+    # --- Shared EDITH box painter -------------------------------------------
+    _DET_COLORS = None   # lazily built QColor map
+
+    def _draw_dets_on(self, px2: QPixmap, detections) -> None:
+        """Paint labeled detection boxes (0-1000 normalized) onto a pixmap."""
+        if self._DET_COLORS is None:
+            type(self)._DET_COLORS = {
+                "person":  QColor("#f97316"),
+                "vehicle": QColor("#facc15"),
+                "object":  QColor("#00d4ff"),
+            }
+        sw, sh = px2.width(), px2.height()
+        p = QPainter(px2)
+        try:
+            p.setFont(QFont("Courier New", 8, QFont.Weight.Bold))
+            for d in (detections or [])[:12]:
+                box = d.get("box") or []
+                if len(box) != 4:
+                    continue
+                try:
+                    ymin, xmin, ymax, xmax = (
+                        max(0.0, min(1000.0, float(v))) for v in box
+                    )
+                except (TypeError, ValueError):
+                    continue
+                if xmax - xmin < 5 or ymax - ymin < 5:
+                    continue
+                col = self._DET_COLORS.get(d.get("kind"), self._DET_COLORS["object"])
+                pen = QPen(col)
+                pen.setWidth(2)
+                p.setPen(pen)
+                x  = int(xmin / 1000 * sw)
+                y  = int(ymin / 1000 * sh)
+                bw = int((xmax - xmin) / 1000 * sw)
+                bh = int((ymax - ymin) / 1000 * sh)
+                p.drawRect(x, y, bw, bh)
+                label = str(d.get("label") or "TARGET").upper()[:42]
+                fm    = p.fontMetrics()
+                tw    = min(fm.horizontalAdvance(label) + 10, sw)
+                th    = fm.height() + 4
+                ly    = y - th if y - th > 0 else y
+                p.fillRect(x, ly, tw, th, col)
+                p.setPen(QPen(QColor("#04070c")))
+                p.drawText(QRectF(x + 5, ly, tw - 8, th),
+                           Qt.AlignmentFlag.AlignVCenter, label)
+        finally:
+            p.end()
+
+    # --- Phone live camera stream on PC HUD ---------------------------------
+    def _on_pcam_stream(self, start: bool) -> None:
+        if start:
+            self._feed_mode = "phonecam"
+            self._cam_title.setText("◈  PHONE CAM — LIVE")
+            self._hud_cam_stack.setCurrentIndex(1)
+        else:
+            if self._feed_mode == "phonecam":
+                self._feed_mode = "none"
+                self._hud_cam_stack.setCurrentIndex(0)
+            self._pcam_px = None
+            self._pcam_dets = []
+            if self._feed_mode == "none":
+                self._cam_live_lbl.clear()
+
+    def _on_pcam_frame(self, data: bytes) -> None:
+        if self._feed_mode != "phonecam":
+            return
+        px = QPixmap()
+        px.loadFromData(data)
+        if px.isNull():
+            return
+        self._pcam_px = px
+        self._repaint_pcam()
+
+    def _on_pcam_dets(self, dets) -> None:
+        if self._feed_mode != "phonecam":
+            return
+        self._pcam_dets = dets or []
+        self._repaint_pcam()
+
+    def _repaint_pcam(self) -> None:
+        if self._pcam_px is None:
+            return
+        w, h = self._cam_live_lbl.width(), self._cam_live_lbl.height()
+        if w <= 1 or h <= 1:
+            px2 = QPixmap(self._pcam_px)
+        else:
+            px2 = self._pcam_px.scaled(
+                w, h,
+                Qt.AspectRatioMode.KeepAspectRatio,
+                Qt.TransformationMode.SmoothTransformation,
+            )
+        self._draw_dets_on(px2, self._pcam_dets)
+        self._cam_live_lbl.setPixmap(px2)
 
     # --- Phone scan overlay (EDITH snapshot with detection boxes) ----------
     def _on_phone_scan(self, img_bytes: bytes, detections) -> None:
@@ -2126,47 +2232,7 @@ class MainWindow(QMainWindow):
                 Qt.AspectRatioMode.KeepAspectRatio,
                 Qt.TransformationMode.SmoothTransformation,
             )
-        _COLORS = {
-            "person":  QColor("#f97316"),
-            "vehicle": QColor("#facc15"),
-            "object":  QColor("#00d4ff"),
-        }
-        sw, sh = px2.width(), px2.height()
-        p = QPainter(px2)
-        try:
-            p.setFont(QFont("Courier New", 8, QFont.Weight.Bold))
-            for d in (detections or [])[:12]:
-                box = d.get("box") or []
-                if len(box) != 4:
-                    continue
-                try:
-                    ymin, xmin, ymax, xmax = (
-                        max(0.0, min(1000.0, float(v))) for v in box
-                    )
-                except (TypeError, ValueError):
-                    continue
-                if xmax - xmin < 5 or ymax - ymin < 5:
-                    continue
-                col = _COLORS.get(d.get("kind"), _COLORS["object"])
-                pen = QPen(col)
-                pen.setWidth(2)
-                p.setPen(pen)
-                x  = int(xmin / 1000 * sw)
-                y  = int(ymin / 1000 * sh)
-                bw = int((xmax - xmin) / 1000 * sw)
-                bh = int((ymax - ymin) / 1000 * sh)
-                p.drawRect(x, y, bw, bh)
-                label = str(d.get("label") or "TARGET").upper()[:42]
-                fm    = p.fontMetrics()
-                tw    = min(fm.horizontalAdvance(label) + 10, sw)
-                th    = fm.height() + 4
-                ly    = y - th if y - th > 0 else y
-                p.fillRect(x, ly, tw, th, col)
-                p.setPen(QPen(QColor("#04070c")))
-                p.drawText(QRectF(x + 5, ly, tw - 8, th),
-                           Qt.AlignmentFlag.AlignVCenter, label)
-        finally:
-            p.end()
+        self._draw_dets_on(px2, detections)
         self._cam_live_lbl.setPixmap(px2)
         QTimer.singleShot(20000, self._leave_scan)
 
@@ -3537,6 +3603,22 @@ class JarvisUI:
     def show_phone_scan(self, img_bytes: bytes, detections) -> None:
         """Thread-safe: paint a phone-scanned frame + EDITH boxes onto the HUD area."""
         self._win._scan_sig.emit(img_bytes, detections)
+
+    def start_phone_cam(self) -> None:
+        """Thread-safe: switch the HUD area to the phone's live camera stream."""
+        self._win._pcam_sig.emit(True)
+
+    def stop_phone_cam(self) -> None:
+        """Thread-safe: hide the phone's live camera stream."""
+        self._win._pcam_sig.emit(False)
+
+    def show_phone_cam_frame(self, frame_bytes: bytes) -> None:
+        """Thread-safe: newest live frame from the phone camera."""
+        self._win._pcam_frame_sig.emit(frame_bytes)
+
+    def show_phone_cam_dets(self, dets) -> None:
+        """Thread-safe: newest live detection boxes for the phone stream."""
+        self._win._pcam_dets_sig.emit(dets)
 
     def set_device_callbacks(self, provider, kicker) -> None:
         """Wire the Remote overlay's device hub to the dashboard (called by main.py)."""

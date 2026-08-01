@@ -396,6 +396,7 @@ _HUD_PROMPT = (
     "coordinates, tight around the target. "
     "Label rules: person → 'PERSON — <clothing/color/pose>' (never a real name); "
     "vehicle → 'CAR / BIKE / TRUCK / BUS — <color> <make & model if recognizable>'; "
+    "animal → 'DOG / CAT / BIRD — <color, likely type/breed>'; "
     "license/number plate → 'PLATE — <exact characters>' with kind 'vehicle', but "
     "ONLY if the characters are actually readable in the image; "
     "famous landmark, product or logo → its real well-known name; "
@@ -500,6 +501,8 @@ class DashboardServer:
         self._device_sessions: dict[str, dict] = {}  # device_token → {session_key}
         self._phone_audio_queue: asyncio.Queue    = asyncio.Queue(maxsize=200)
         self._phone_vision_queue: asyncio.Queue   = asyncio.Queue(maxsize=10)
+        self._phone_cam_queue: asyncio.Queue      = asyncio.Queue(maxsize=2)  # live stream → PC HUD
+        self._cam_stream_active: bool             = False
         self._audio_out_queue: asyncio.Queue      = asyncio.Queue(maxsize=400)  # JARVIS voice → phones
         self._uploads_dir                 = UPLOADS_DIR
         self._login_html                  = _read("login.html")
@@ -580,7 +583,7 @@ class DashboardServer:
 
     async def broadcast(self, msg: dict) -> None:
         # transient pings are not replayed to freshly reconnecting phones
-        if msg.get("type") not in ("devices", "vision_status"):
+        if msg.get("type") not in ("devices", "vision_status", "live_dets"):
             self._history.append(msg)
             if len(self._history) > 300:
                 self._history = self._history[-300:]
@@ -883,6 +886,41 @@ class DashboardServer:
                     msg = msg[:200]
                 return JSONResponse({"ok": False, "error": msg}, status_code=502)
             return JSONResponse({"ok": True, "detections": detections})
+
+        # ── Phone camera live stream → PC HUD ─────────────────────────────────
+
+        @app.websocket("/ws/phone-cam")
+        async def phone_cam_ws(websocket: WebSocket, token: str = ""):
+            """Continuous JPEG frames from the phone camera; the latest frame is
+            what the PC window draws. ~3 fps keeps live preview cheap."""
+            tok = token.strip()
+            if not tok or tok not in self._tokens:
+                await websocket.close(code=4001)
+                return
+            await websocket.accept()
+            self._cam_stream_active = True
+            asyncio.create_task(self.broadcast(
+                {"type": "sys", "text": "Phone camera streaming to PC."}
+            ))
+            try:
+                while True:
+                    data = await websocket.receive_bytes()
+                    try:
+                        self._phone_cam_queue.put_nowait(data)
+                    except asyncio.QueueFull:
+                        # always keep only the freshest frame
+                        try:
+                            self._phone_cam_queue.get_nowait()
+                            self._phone_cam_queue.put_nowait(data)
+                        except Exception:
+                            pass
+            except WebSocketDisconnect:
+                pass
+            finally:
+                self._cam_stream_active = False
+                asyncio.create_task(self.broadcast(
+                    {"type": "sys", "text": "Phone camera stream stopped."}
+                ))
 
         # ── Phone mic real-time audio → Gemini Live ──────────────────────────
 

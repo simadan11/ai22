@@ -269,6 +269,16 @@
       cursor: pointer; font-family: inherit;
     }
     #cam-scan:active { transform: scale(0.96); }
+    #cam-live {
+      padding: 0 14px; background: transparent; border: 1px solid rgba(34,211,238,0.5);
+      border-radius: 10px; color: #22d3ee; font-size: 12px; font-weight: 800;
+      letter-spacing: 1.5px; cursor: pointer; font-family: inherit;
+    }
+    #cam-live:active { transform: scale(0.96); }
+    #cam-live.on {
+      background: rgba(239,68,68,0.18); border-color: rgba(239,68,68,0.55);
+      color: #ef4444; animation: mic-pulse 1s ease-in-out infinite;
+    }
     #cam-flip {
       padding: 0 14px; background: rgba(255,255,255,0.08);
       border: 1px solid rgba(255,255,255,0.15); border-radius: 10px;
@@ -334,6 +344,7 @@
     <div class="cam-status" id="cam-status">INITIALIZING…</div>
     <div class="cam-controls">
       <input id="cam-q" placeholder="Ask about what you see… (optional)" autocomplete="off">
+      <button id="cam-live" onclick="toggleLive()" title="Stream camera to PC">LIVE</button>
       <button id="cam-scan" onclick="doScan()">SCAN</button>
       <button id="cam-flip" onclick="flipCamera()" title="Flip camera">🔄</button>
     </div>
@@ -411,6 +422,13 @@
       if (m.type === 'file_received') _onFileReceived(m);
       if (m.type === 'devices')       _setDevCount(m.count);
       if (m.type === 'vision_status') sys(m.state === 'error' ? m.text : 'Phone camera: ' + m.state + '…');
+      if (m.type === 'live_dets') {
+        // PC-side live detection shared back → draw boxes on the phone too
+        if (camOverlay.classList.contains('open') && Array.isArray(m.detections)) {
+          _lastDets = m.detections;
+          _drawBoxes();
+        }
+      }
       _onVisionMsg(m);
     };
 
@@ -901,6 +919,7 @@
     }
 
     function closeCamera() {
+      stopLive();
       camOverlay.classList.remove('open');
       _stopCamStream();
       camVideo.srcObject = null;
@@ -910,21 +929,69 @@
     }
 
     async function flipCamera() {
+      stopLive();
       _facing = (_facing === 'environment') ? 'user' : 'environment';
       _lastDets = []; camBoxes.innerHTML = '';
       if (camOverlay.classList.contains('open')) await _startCamStream();
     }
 
-    function _grabFrame() {
+    function _grabFrame(MAX = 1280, Q = 0.8) {
       const vw = camVideo.videoWidth, vh = camVideo.videoHeight;
       if (!vw || !vh) return null;
-      const MAX = 1280;
       const sc  = Math.min(1, MAX / Math.max(vw, vh));
       const c   = document.createElement('canvas');
       c.width   = Math.round(vw * sc);
       c.height  = Math.round(vh * sc);
       c.getContext('2d').drawImage(camVideo, 0, 0, c.width, c.height);
-      return (c.toDataURL('image/jpeg', 0.8).split(',')[1]) || null;
+      return (c.toDataURL('image/jpeg', Q).split(',')[1]) || null;
+    }
+
+    function _b64ToBytes(b64) {
+      const bin = atob(b64);
+      const out = new Uint8Array(bin.length);
+      for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+      return out.buffer;
+    }
+
+    // ── LIVE — stream the phone camera onto the PC HUD ──────────────────────
+    let _liveWs = null, _liveTimer = null;
+
+    function toggleLive() {
+      if (_liveWs || _liveTimer) { stopLive(); return; }
+      const wsProto = location.protocol === 'https:' ? 'wss' : 'ws';
+      const ws = new WebSocket(
+        `${wsProto}://${location.host}/ws/phone-cam?token=${encodeURIComponent(_authToken)}`
+      );
+      ws.binaryType = 'arraybuffer';
+
+      ws.onopen = () => {
+        _liveWs = ws;
+        const btn = document.getElementById('cam-live');
+        btn.classList.add('on'); btn.textContent = '⏹';
+        camStatus.textContent = 'STREAMING TO PC — LIVE';
+        toast('📡 Live on PC');
+        // ~3 fps of small JPEGs is plenty for a LAN preview and keeps
+        // bandwidth light for the detection pass that runs alongside
+        _liveTimer = setInterval(() => {
+          if (ws.readyState !== 1) return;
+          const f = _grabFrame(560, 0.55);
+          if (f) ws.send(_b64ToBytes(f));
+        }, 320);
+      };
+      ws.onclose = () => stopLive();
+      ws.onerror = () => stopLive();
+    }
+
+    function stopLive() {
+      if (_liveTimer) { clearInterval(_liveTimer); _liveTimer = null; }
+      if (_liveWs) {
+        const w = _liveWs; _liveWs = null;
+        if (w.readyState < 2) w.close();
+      }
+      const btn = document.getElementById('cam-live');
+      btn.classList.remove('on'); btn.textContent = 'LIVE';
+      if (camOverlay.classList.contains('open'))
+        camStatus.textContent = _lastDets.length ? 'ANALYSIS COMPLETE' : 'LIVE FEED — TAP SCAN TO IDENTIFY';
     }
 
     async function doScan() {

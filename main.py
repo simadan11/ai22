@@ -1462,6 +1462,63 @@ class JarvisLive:
         except Exception as e:
             print(f"[Dashboard] PC scan overlay failed: {e}")
 
+    # ── phone camera live stream relay ───────────────────────────────────
+
+    async def _relay_phone_cam(self) -> None:
+        """Live phone-camera frames → PC HUD area. While streaming, a background
+        detection pass (~every 1.4 s) refreshes EDITH boxes on PC and phone."""
+        q = self._dashboard._phone_cam_queue
+        live = False
+        last_det = 0.0
+        det_task = None
+        while True:
+            try:
+                frame = await asyncio.wait_for(q.get(), timeout=0.8)
+            except asyncio.TimeoutError:
+                if live:   # stream went quiet — hide the PC overlay
+                    live = False
+                    last_det = 0.0
+                    try:
+                        self.ui.stop_phone_cam()
+                    except Exception:
+                        pass
+                continue
+            except Exception as e:
+                print(f"[Dashboard] Cam queue error: {e}")
+                await asyncio.sleep(0.5)
+                continue
+            if not live:
+                live = True
+                try:
+                    self.ui.start_phone_cam()
+                    self.ui.write_log("SYS: Phone camera live on PC HUD.")
+                except Exception:
+                    pass
+            try:
+                self.ui.show_phone_cam_frame(frame)
+            except Exception:
+                pass
+            now = time.monotonic()
+            if now - last_det >= 1.4 and (det_task is None or det_task.done()):
+                last_det = now
+                det_task = asyncio.create_task(self._live_detect_task(frame))
+
+    async def _live_detect_task(self, frame: bytes) -> None:
+        """One background detection pass over the freshest live frame."""
+        try:
+            from dashboard.server import _edith_detect
+            dets = await asyncio.to_thread(_edith_detect, frame)
+        except Exception as e:
+            print(f"[Dashboard] Live detection failed: {e}")
+            return
+        if not dets or not self._dashboard._cam_stream_active:
+            return  # stream stopped while the model was thinking
+        try:
+            self.ui.show_phone_cam_dets(dets)
+        except Exception:
+            pass
+        await self._dashboard.broadcast({"type": "live_dets", "detections": dets})
+
     # ── dashboard command relay ─────────────────────────────────────────────
 
     async def _process_dashboard_commands(self) -> None:
@@ -1518,6 +1575,7 @@ class JarvisLive:
             # Runs for the whole lifetime, not just inside an active session
             asyncio.create_task(self._process_dashboard_commands())
             asyncio.create_task(self._relay_phone_vision())
+            asyncio.create_task(self._relay_phone_cam())
         except Exception as e:
             print(f"[Dashboard] Disabled: {e}")
             self._dashboard = None
