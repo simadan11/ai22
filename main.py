@@ -52,6 +52,7 @@ from actions.web_search        import web_search as web_search_action
 from actions.osint_lookup      import osint_lookup
 from actions.network_scanner   import network_scanner
 from actions.install_on_phone  import install_on_phone
+from actions.voice_features    import wakeword_detect, optimize_for_tts, offline_fallback
 from actions.computer_control  import computer_control
 from actions.game_updater      import game_updater
 from actions.system_monitor    import SystemMonitor, get_system_status
@@ -939,6 +940,14 @@ class JarvisLive:
             result = f"Tool '{name}' failed: {e}"
             traceback.print_exc()
             self.speak_error(name, e)
+            # Offline fallback when API/network down
+            try:
+                result = offline_fallback() + " | " + result
+            except Exception:
+                pass
+
+        if result and isinstance(result, str):
+            result = optimize_for_tts(result)
 
         if not self.ui.muted:
             self.ui.set_state("LISTENING")
