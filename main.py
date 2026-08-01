@@ -1,5 +1,15 @@
 import platform as _platform
 import subprocess as _subprocess
+import warnings as _warnings
+
+# ── Suppress known DeprecationWarnings ───────────────────────────────────────
+# sounddevice uses `data.shape = -1, channels` which is deprecated in NumPy 2.5
+# but still works fine. Suppress to avoid console spam.
+_warnings.filterwarnings("ignore", category=DeprecationWarning, module="sounddevice")
+_warnings.filterwarnings("ignore", message=".*Setting the shape on a NumPy array.*")
+# duckduckgo_search renamed to ddgs — suppress the runtime warning
+_warnings.filterwarnings("ignore", message=".*duckduckgo_search.*has been renamed.*")
+# ─────────────────────────────────────────────────────────────────────────────
 
 # ── Nuclear: force CREATE_NO_WINDOW on EVERY subprocess call on Windows ───────
 # This patches Popen itself, so no per-file flag is needed anywhere.
@@ -13,6 +23,20 @@ if _platform.system() == "Windows":
             super().__init__(args, **kw)
 
     _subprocess.Popen = _Popen
+# ─────────────────────────────────────────────────────────────────────────────
+
+# ── Windows DPI Awareness ────────────────────────────────────────────────────
+# Must be set BEFORE any Qt/GUI imports to avoid SetProcessDpiAwarenessContext
+# failures and blurry rendering on high-DPI monitors.
+if _platform.system() == "Windows":
+    try:
+        import ctypes
+        ctypes.windll.shcore.SetProcessDpiAwareness(2)  # Per-Monitor DPI aware
+    except Exception:
+        try:
+            ctypes.windll.user32.SetProcessDPIAware()
+        except Exception:
+            pass
 # ─────────────────────────────────────────────────────────────────────────────
 
 import asyncio

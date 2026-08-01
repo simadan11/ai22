@@ -18,6 +18,18 @@ if platform.system() == "Windows":
 else:
     _WIN_HIDE: dict = {}
 
+# ── Windows DPI Awareness (must be set before PyQt6 import) ──────────────────
+if platform.system() == "Windows":
+    try:
+        import ctypes
+        ctypes.windll.shcore.SetProcessDpiAwareness(2)
+    except Exception:
+        try:
+            ctypes.windll.user32.SetProcessDPIAware()
+        except Exception:
+            pass
+# ─────────────────────────────────────────────────────────────────────────────
+
 from PyQt6.QtCore import (
     QEasingCurve, QMimeData, QObject, QPointF, QRectF, QSize, Qt,
     QTimer, QUrl, pyqtSignal,
