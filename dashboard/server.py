@@ -11,6 +11,7 @@ Install deps:  pip install fastapi "uvicorn[standard]" cryptography
 import asyncio
 import base64
 import hashlib
+import json
 import re
 import secrets
 import socket
@@ -364,6 +365,123 @@ def _read(name: str) -> str:
     return (STATIC_DIR / name).read_text(encoding="utf-8")
 
 
+def _device_name(agent: str) -> str:
+    """Short human label for a User-Agent string."""
+    a = (agent or "").lower()
+    for needle, name in (
+        ("iphone", "iPhone"), ("ipad", "iPad"), ("android", "Android"),
+        ("windows phone", "Windows Phone"), ("windows", "Windows PC"),
+        ("macintosh", "Mac"), ("mac os", "Mac"), ("cros", "Chromebook"),
+        ("linux", "Linux"),
+    ):
+        if needle in a:
+            return name
+    return "Device"
+
+
+# ── Phone camera — EDITH-style HUD detection ──────────────────────────────────
+
+_HUD_MODEL = "gemini-2.5-flash"
+_MAX_FRAME_BYTES = 8 * 1024 * 1024   # decoded JPEG cap
+
+_HUD_PROMPT = (
+    "You are a tactical augmented-reality vision system (like EDITH from Spider-Man). "
+    "Look at the photo and list every PERSON, every VEHICLE (plus any readable "
+    "license plate), and every notable OBJECT, animal, readable text block or "
+    "screen. Return ONLY a JSON array. Each element has exactly: "
+    '"label": 2-6 word uppercase name (rules below); '
+    '"kind": "person", "vehicle" or "object"; '
+    '"detail": one short phrase (max 10 words) with visible appearance/context; '
+    '"box": [ymin, xmin, ymax, xmax] as integers 0-1000 in normalized image '
+    "coordinates, tight around the target. "
+    "Label rules: person → 'PERSON — <clothing/color/pose>' (never a real name); "
+    "vehicle → 'CAR / BIKE / TRUCK / BUS — <color> <make & model if recognizable>'; "
+    "animal → 'DOG / CAT / BIRD — <color, likely type/breed>'; "
+    "license/number plate → 'PLATE — <exact characters>' with kind 'vehicle', but "
+    "ONLY if the characters are actually readable in the image; "
+    "famous landmark, product or logo → its real well-known name; "
+    "anything else → short common name like 'LAPTOP', 'CAR KEYS'. "
+    "For people describe ONLY visible appearance/clothing/pose — never guess names "
+    "or identities. Prefer precise small boxes over big loose ones. "
+    "Max 12 items. If nothing notable is visible return []."
+)
+
+
+class _FrameError(Exception):
+    def __init__(self, msg: str, status: int):
+        super().__init__(msg)
+        self.status = status
+
+
+def _decode_frame(body: dict) -> bytes:
+    """Decode a base64 JPEG frame from a JSON request body."""
+    b64 = str(body.get("frame") or "").strip()
+    if not b64:
+        raise _FrameError("frame is required", 400)
+    # tolerate data-URL payloads sent by some clients
+    if "," in b64 and b64[:32].lower().startswith("data:"):
+        b64 = b64.split(",", 1)[1]
+    try:
+        raw = base64.b64decode(b64, validate=True)
+    except Exception:
+        raw = base64.b64decode(b64 + "=" * (-len(b64) % 4))
+    if not raw or len(raw) > _MAX_FRAME_BYTES:
+        raise _FrameError(
+            f"frame too large (max {_MAX_FRAME_BYTES // (1024 * 1024)} MB)", 413
+        )
+    return raw
+
+
+def _edith_detect(image_bytes: bytes) -> list[dict]:
+    """Blocking Gemini call → normalized list of HUD detections. Raises on failure."""
+    from google import genai as _g
+    from google.genai import types as _gt
+
+    key = _get_gemini_key()
+    if not key:
+        raise RuntimeError("gemini_api_key not configured")
+    client = _g.Client(api_key=key)
+    resp = client.models.generate_content(
+        model=_HUD_MODEL,
+        contents=[
+            _gt.Part.from_bytes(data=image_bytes, mime_type="image/jpeg"),
+            _HUD_PROMPT,
+        ],
+        config=_gt.GenerateContentConfig(
+            response_mime_type="application/json",
+            temperature=0.2,
+        ),
+    )
+    data = json.loads((resp.text or "").strip() or "[]")
+    if isinstance(data, dict):           # model wrapped the array in an object
+        data = next((v for v in data.values() if isinstance(v, list)), [])
+    if not isinstance(data, list):
+        return []
+    out: list[dict] = []
+    for item in data:
+        if not isinstance(item, dict):
+            continue
+        box = item.get("box") or item.get("box_2d")
+        if not (isinstance(box, (list, tuple)) and len(box) == 4):
+            continue
+        try:
+            box = [float(x) for x in box]
+        except (TypeError, ValueError):
+            continue
+        kind = str(item.get("kind", "")).lower()
+        if kind not in ("person", "vehicle"):
+            kind = "object"
+        out.append({
+            "label":  str(item.get("label") or "TARGET")[:60],
+            "kind":   kind,
+            "detail": str(item.get("detail") or "")[:120],
+            "box":    box,
+        })
+        if len(out) >= 12:
+            break
+    return out
+
+
 # ── DashboardServer ───────────────────────────────────────────────────────────
 
 class DashboardServer:
@@ -374,6 +492,7 @@ class DashboardServer:
         self._token_keys: dict[str, str]  = {}   # auth_token → session_key
         self._aes_cache:  dict[str, bytes]= {}   # session_key → AES bytes
         self._clients: set[WebSocket]     = set()
+        self._client_info: dict[str, dict] = {}   # dev_id → {ws, ip, name, since}
         self._history: list[dict]         = []
         self._command_queue               = asyncio.Queue()
         self._wake_callback               = None
@@ -381,6 +500,10 @@ class DashboardServer:
         self._pending_keys: dict[str, float] = {}
         self._device_sessions: dict[str, dict] = {}  # device_token → {session_key}
         self._phone_audio_queue: asyncio.Queue    = asyncio.Queue(maxsize=200)
+        self._phone_vision_queue: asyncio.Queue   = asyncio.Queue(maxsize=10)
+        self._phone_cam_queue: asyncio.Queue      = asyncio.Queue(maxsize=2)  # live stream → PC HUD
+        self._cam_stream_active: bool             = False
+        self._audio_out_queue: asyncio.Queue      = asyncio.Queue(maxsize=400)  # JARVIS voice → phones
         self._uploads_dir                 = UPLOADS_DIR
         self._login_html                  = _read("login.html")
         self._app_html                    = _read("app.html")
@@ -432,12 +555,38 @@ class DashboardServer:
     def set_connect_callback(self, fn) -> None:
         self._connect_callback = fn
 
+    # ── JARVIS voice → phones ─────────────────────────────────────────────
+
+    def feed_audio(self, chunk: bytes) -> None:
+        """main.py drops every JARVIS speech PCM slice here (24 kHz int16 mono).
+        Non-blocking: a slow phone must never stall the assistant's voice."""
+        try:
+            self._audio_out_queue.put_nowait(chunk)
+        except asyncio.QueueFull:
+            pass  # phone lags more than ~8 s behind — drop rather than back up
+
+    async def _audio_broadcast_loop(self) -> None:
+        """Fan out JARVIS voice PCM to every connected phone (binary WS frames)."""
+        while True:
+            chunk = await self._audio_out_queue.get()
+            if not self._clients:
+                continue
+            dead: set[WebSocket] = set()
+            for ws in list(self._clients):
+                try:
+                    await ws.send_bytes(chunk)
+                except Exception:
+                    dead.add(ws)
+            self._clients -= dead
+
     # ── broadcast ────────────────────────────────────────────────────────
 
     async def broadcast(self, msg: dict) -> None:
-        self._history.append(msg)
-        if len(self._history) > 300:
-            self._history = self._history[-300:]
+        # transient pings are not replayed to freshly reconnecting phones
+        if msg.get("type") not in ("devices", "vision_status", "live_dets"):
+            self._history.append(msg)
+            if len(self._history) > 300:
+                self._history = self._history[-300:]
         dead: set[WebSocket] = set()
         for ws in list(self._clients):
             try:
@@ -445,6 +594,47 @@ class DashboardServer:
             except Exception:
                 dead.add(ws)
         self._clients -= dead
+        if dead:
+            dropped = {id(ws) for ws in dead}
+            self._client_info = {
+                k: v for k, v in self._client_info.items()
+                if id(v.get("ws")) not in dropped
+            }
+
+    # ── device management ────────────────────────────────────────────────
+
+    def devices_info(self) -> list[dict]:
+        """Snapshot of remotes on the live /ws socket — for the PC hub & phone hub."""
+        now = time.time()
+        return [
+            {
+                "id":   did,
+                "name": info["name"],
+                "ip":   info["ip"],
+                "secs": int(now - info["since"]),
+            }
+            for did, info in list(self._client_info.items())
+        ]
+
+    def revoke_all_paired(self) -> int:
+        n = len(self._device_sessions)
+        self._device_sessions.clear()
+        return n
+
+    async def disconnect_device(self, dev_id: str) -> bool:
+        """Kick one connected remote off the /ws socket."""
+        info = self._client_info.pop(dev_id, None)
+        if not info:
+            return False
+        ws = info.get("ws")
+        if ws is not None:
+            self._clients.discard(ws)
+            try:
+                await ws.close(code=4000)
+            except Exception:
+                pass
+        await self.broadcast({"type": "devices", "count": len(self._clients)})
+        return True
 
     # ── FastAPI app ───────────────────────────────────────────────────────
 
@@ -577,6 +767,28 @@ class DashboardServer:
             self._device_sessions.clear()
             return JSONResponse({"ok": True, "revoked": count})
 
+        @app.get("/api/devices")
+        async def list_devices(req: Request):
+            """Who is live on the /ws socket right now (+ how many paired devices)."""
+            if not _auth(req):
+                return JSONResponse({"error": "Unauthorized"}, status_code=401)
+            return JSONResponse({
+                "devices": self.devices_info(),
+                "paired":  len(self._device_sessions),
+            })
+
+        @app.post("/api/disconnect")
+        async def disconnect_ep(req: Request):
+            """Kick one connected remote (hub action)."""
+            if not _auth(req):
+                return JSONResponse({"error": "Unauthorized"}, status_code=401)
+            try:
+                body = await req.json()
+            except Exception:
+                body = {}
+            ok = await self.disconnect_device(str((body or {}).get("id") or ""))
+            return JSONResponse({"ok": ok})
+
         @app.post("/api/command")
         async def command(req: Request):
             if not _auth(req):
@@ -603,6 +815,112 @@ class DashboardServer:
             if self._wake_callback:
                 self._wake_callback()
             return JSONResponse({"ok": True})
+
+        # ── Phone camera — EDITH vision ───────────────────────────────────────
+
+        @app.post("/api/vision-scan")
+        async def vision_scan(req: Request):
+            """Phone camera frame → queued for the main Gemini Live session.
+
+            main.py::_relay_phone_vision injects the frame + question into the
+            live session, JARVIS answers by voice on the PC, and the transcript
+            is broadcast back to every phone feed automatically.
+            """
+            if not _auth(req):
+                return JSONResponse({"ok": False, "error": "Unauthorized"}, status_code=401)
+            try:
+                body = await req.json()
+            except Exception:
+                return JSONResponse({"ok": False, "error": "Bad JSON"}, status_code=400)
+            try:
+                frame = _decode_frame(body)
+            except _FrameError as e:
+                return JSONResponse({"ok": False, "error": str(e)}, status_code=e.status)
+            except Exception:
+                return JSONResponse({"ok": False, "error": "Bad frame"}, status_code=400)
+
+            question = str(body.get("question") or "").strip()[:500]
+            try:
+                self._phone_vision_queue.put_nowait((frame, "image/jpeg", question))
+            except asyncio.QueueFull:
+                # Latest view is always more relevant — evict the oldest frame
+                try:
+                    self._phone_vision_queue.get_nowait()
+                    self._phone_vision_queue.put_nowait((frame, "image/jpeg", question))
+                except Exception:
+                    pass
+
+            if self._wake_callback:
+                self._wake_callback()
+            asyncio.create_task(self.broadcast(
+                {"type": "vision_status", "state": "received"}
+            ))
+            return JSONResponse({"ok": True})
+
+        @app.post("/api/vision-hud")
+        async def vision_hud(req: Request):
+            """EDITH-style detection: frame → labeled boxes drawn on the phone HUD."""
+            if not _auth(req):
+                return JSONResponse({"ok": False, "error": "Unauthorized"}, status_code=401)
+            try:
+                body = await req.json()
+            except Exception:
+                return JSONResponse({"ok": False, "error": "Bad JSON"}, status_code=400)
+            try:
+                frame = _decode_frame(body)
+            except _FrameError as e:
+                return JSONResponse({"ok": False, "error": str(e)}, status_code=e.status)
+            except Exception:
+                return JSONResponse({"ok": False, "error": "Bad frame"}, status_code=400)
+            try:
+                detections = await asyncio.to_thread(_edith_detect, frame)
+            except Exception as e:
+                print(f"[Dashboard] HUD detection failed: {e}")
+                msg = str(e)
+                if any(k in msg for k in (
+                    "UNAUTHENTICATED", "API_KEY_INVALID", "API key not valid",
+                    "invalid authentication credentials", "ACCESS_TOKEN_TYPE_UNSUPPORTED",
+                )):
+                    msg = "GEMINI API KEY INVALID — update config/api_keys.json"
+                else:
+                    msg = msg[:200]
+                return JSONResponse({"ok": False, "error": msg}, status_code=502)
+            return JSONResponse({"ok": True, "detections": detections})
+
+        # ── Phone camera live stream → PC HUD ─────────────────────────────────
+
+        @app.websocket("/ws/phone-cam")
+        async def phone_cam_ws(websocket: WebSocket, token: str = ""):
+            """Continuous JPEG frames from the phone camera; the latest frame is
+            what the PC window draws. ~3 fps keeps live preview cheap."""
+            tok = token.strip()
+            if not tok or tok not in self._tokens:
+                await websocket.close(code=4001)
+                return
+            await websocket.accept()
+            self._cam_stream_active = True
+            asyncio.create_task(self.broadcast(
+                {"type": "sys", "text": "Phone camera streaming to PC."}
+            ))
+            try:
+                while True:
+                    data = await websocket.receive_bytes()
+                    try:
+                        self._phone_cam_queue.put_nowait(data)
+                    except asyncio.QueueFull:
+                        # always keep only the freshest frame
+                        try:
+                            self._phone_cam_queue.get_nowait()
+                            self._phone_cam_queue.put_nowait(data)
+                        except Exception:
+                            pass
+            except WebSocketDisconnect:
+                pass
+            finally:
+                self._cam_stream_active = False
+                asyncio.create_task(self.broadcast(
+                    {"type": "sys", "text": "Phone camera stream stopped."}
+                ))
 
         # ── Phone mic real-time audio → Gemini Live ──────────────────────────
 
@@ -728,6 +1046,20 @@ class DashboardServer:
                 return
             await websocket.accept()
             self._clients.add(websocket)
+            dev_id = secrets.token_hex(4)
+            try:
+                ip = websocket.client.host if websocket.client else "?"
+            except Exception:
+                ip = "?"
+            self._client_info[dev_id] = {
+                "ws":   websocket,
+                "ip":   ip,
+                "name": _device_name(websocket.headers.get("user-agent", "")),
+                "since": time.time(),
+            }
+            asyncio.create_task(self.broadcast(
+                {"type": "devices", "count": len(self._clients)}
+            ))
             for entry in self._history[-50:]:
                 try:
                     await websocket.send_json(entry)
@@ -747,6 +1079,10 @@ class DashboardServer:
                 pass
             finally:
                 self._clients.discard(websocket)
+                self._client_info.pop(dev_id, None)
+                asyncio.create_task(self.broadcast(
+                    {"type": "devices", "count": len(self._clients)}
+                ))
 
         return app
 
@@ -791,4 +1127,5 @@ class DashboardServer:
         proto = "https" if use_ssl else "http"
         print(f"[Dashboard] {proto}://{self._ip}:{PORT}")
         print("[Dashboard] Press 'Remote Control' in JARVIS UI to get the QR code.")
+        asyncio.create_task(self._audio_broadcast_loop())
         await uvicorn.Server(cfg).serve()

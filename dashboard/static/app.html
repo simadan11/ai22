@@ -50,6 +50,51 @@
     .enc-badge.on  { display: block; background: rgba(34,197,94,0.1); border: 1px solid rgba(34,197,94,0.25); color: var(--green); }
     .enc-badge.off { display: block; background: rgba(255,100,100,0.08); border: 1px solid rgba(255,100,100,0.2); color: #f87171; }
     .url { font-size: 10px; font-family: monospace; color: var(--muted); padding: 4px 9px; background: var(--surface); border: 1px solid var(--border); border-radius: 6px; }
+    #spk-btn, #dev-btn {
+      background: var(--surface); border: 1px solid var(--border); color: var(--text);
+      padding: 4px 9px; font-size: 13px; border-radius: 6px; cursor: pointer; line-height: 1.25;
+    }
+    #spk-btn:active, #dev-btn:active { transform: scale(0.95); }
+    #spk-btn.muted  { opacity: 0.45; }
+    #dev-btn #dev-count { font-size: 10px; font-weight: 700; color: var(--green); }
+
+    /* ── DEVICES HUB PANEL ── */
+    #dev-panel {
+      position: fixed; top: 54px; right: 10px; z-index: 220;
+      width: min(310px, 88vw); display: none;
+      background: rgba(7,10,16,0.97); border: 1px solid var(--border);
+      border-radius: 12px; padding: 12px 14px;
+      box-shadow: 0 10px 40px rgba(0,0,0,0.6);
+      font-family: 'SFMono-Regular', Consolas, monospace;
+    }
+    #dev-panel.open { display: block; animation: pop 0.18s ease; }
+    .dp-title { font-size: 10px; font-weight: 800; letter-spacing: 2px; color: var(--accent); margin-bottom: 8px; }
+    .dp-empty { font-size: 11px; color: var(--muted); padding: 6px 0; }
+    .dp-row {
+      display: flex; align-items: center; gap: 8px; padding: 6px 8px;
+      background: var(--surface); border: 1px solid var(--border); border-radius: 8px;
+      margin-bottom: 6px; font-size: 11px;
+    }
+    .dp-meta { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .dp-meta b { color: var(--text); font-weight: 700; }
+    .dp-meta i { color: var(--muted); font-style: normal; font-size: 10px; }
+    .dp-kick {
+      flex-shrink: 0; background: transparent; color: var(--muted);
+      border: 1px solid var(--border); border-radius: 5px;
+      font-size: 9px; font-weight: 800; letter-spacing: 1px;
+      padding: 3px 8px; cursor: pointer; font-family: inherit;
+    }
+    .dp-kick:hover { color: #f87171; border-color: #7f2d2d; }
+    .dp-paired {
+      display: flex; align-items: center; justify-content: space-between;
+      font-size: 10px; color: var(--muted); margin-top: 4px;
+    }
+    #dp-revoke {
+      background: transparent; color: #f87171; border: 1px solid #7f2d2d;
+      border-radius: 5px; font-size: 9px; font-weight: 800; letter-spacing: 1px;
+      padding: 4px 8px; cursor: pointer; font-family: inherit; opacity: 0.85;
+    }
+    #dp-revoke:hover { opacity: 1; }
 
     /* ── FEED ── */
     main { flex: 1; overflow-y: auto; padding: 14px 16px 8px; display: flex; flex-direction: column; gap: 10px; }
@@ -121,9 +166,129 @@
     #mic-btn.unsupported { opacity: 0.3; cursor: not-allowed; }
     @keyframes mic-pulse { 0%,100%{opacity:1;transform:scale(1)} 50%{opacity:0.65;transform:scale(0.97)} }
 
+    /* ── CAM BUTTON ── */
+    #cam-btn {
+      background: var(--surface); border: 1px solid var(--border); color: var(--muted);
+      padding: 11px 13px; font-size: 16px; line-height: 1; border-radius: 12px;
+      cursor: pointer; transition: opacity 0.15s, transform 0.1s, border-color 0.2s;
+      display: flex; align-items: center; justify-content: center; flex-shrink: 0;
+    }
+    #cam-btn:hover  { opacity: 0.82; border-color: #22d3ee; color: #22d3ee; }
+    #cam-btn:active { transform: scale(0.96); }
+
+    /* ── EDITH CAMERA OVERLAY ── */
+    #cam-overlay {
+      position: fixed; inset: 0; z-index: 100; background: #000;
+      display: none; overflow: hidden;
+      font-family: 'SFMono-Regular', Consolas, 'Roboto Mono', monospace;
+    }
+    #cam-overlay.open { display: block; }
+    #cam-video {
+      position: absolute; inset: 0; width: 100%; height: 100%;
+      object-fit: cover; filter: saturate(0.85) contrast(1.08);
+    }
+    #cam-boxes { position: absolute; inset: 0; overflow: hidden; pointer-events: none; }
+    .tag {
+      position: absolute; border: 1.5px solid #22d3ee; border-radius: 3px;
+      box-shadow: 0 0 12px rgba(34,211,238,0.25); animation: tag-pop .25s ease;
+      pointer-events: auto;
+    }
+    .tag-info { cursor: pointer; }
+    .tag-info:hover { box-shadow: 0 0 18px rgba(34,211,238,0.6); }
+    .tag-info:active { transform: scale(0.98); }
+    @keyframes tag-pop { from { opacity: 0; transform: scale(1.15); } }
+    .tag-p { border-color: #f97316; box-shadow: 0 0 12px rgba(249,115,22,0.35); }
+    .tag-v { border-color: #facc15; box-shadow: 0 0 12px rgba(250,204,21,0.35); }
+    .tag-v .tag-l { background: #facc15; }
+    .tag-v .tag-d { color: #fde68a; }
+    .tag-l {
+      position: absolute; top: -1.5px; left: -1.5px; transform: translateY(-100%);
+      font-size: 10px; font-weight: 700; letter-spacing: 1px; color: #04070c;
+      background: #22d3ee; padding: 2px 7px; border-radius: 2px 2px 0 0;
+      white-space: nowrap; max-width: 220px; overflow: hidden; text-overflow: ellipsis;
+    }
+    .tag-p .tag-l { background: #f97316; }
+    .tag-d {
+      position: absolute; bottom: -1.5px; left: -1.5px; transform: translateY(100%);
+      font-size: 9px; letter-spacing: 0.5px; color: #67e8f9; white-space: nowrap;
+      text-shadow: 0 1px 3px #000;
+    }
+    .tag-p .tag-d { color: #fdba74; }
+    .cam-scanline {
+      position: absolute; left: 0; right: 0; height: 90px; pointer-events: none;
+      background: linear-gradient(to bottom, transparent, rgba(34,211,238,0.10), transparent);
+      animation: scan-move 4.5s linear infinite;
+    }
+    @keyframes scan-move { 0% { top: -15%; } 100% { top: 110%; } }
+    .cf { position: absolute; width: 34px; height: 34px; border: 2px solid rgba(34,211,238,0.85); pointer-events: none; }
+    .cf-tl { top: 14px;    left: 14px;  border-right: none; border-bottom: none; }
+    .cf-tr { top: 14px;    right: 14px; border-left: none;  border-bottom: none; }
+    .cf-bl { bottom: 92px; left: 14px;  border-right: none; border-top: none; }
+    .cf-br { bottom: 92px; right: 14px; border-left: none;  border-top: none; }
+    .cam-top {
+      position: absolute; top: 0; left: 0; right: 0; display: flex; align-items: center;
+      gap: 10px; padding: 24px 22px 14px;
+      background: linear-gradient(to bottom, rgba(0,0,0,0.65), transparent);
+    }
+    .cam-title { font-size: 12px; font-weight: 700; letter-spacing: 3px; color: #22d3ee; }
+    .cam-title em { font-style: normal; color: rgba(221,227,237,0.5); letter-spacing: 1.5px; font-size: 10px; }
+    .cam-targets { margin-left: auto; font-size: 10px; font-weight: 700; letter-spacing: 1.5px; color: #f97316; }
+    .cam-x {
+      background: rgba(255,255,255,0.08); border: 1px solid rgba(255,255,255,0.15);
+      color: #dde3ed; width: 34px; height: 34px; border-radius: 50%;
+      font-size: 14px; cursor: pointer; flex-shrink: 0;
+    }
+    .cam-status {
+      position: absolute; left: 20px; bottom: 82px; font-size: 10px; font-weight: 700;
+      letter-spacing: 2px; color: #22d3ee; text-shadow: 0 1px 3px #000; pointer-events: none;
+    }
+    #cam-log {
+      position: absolute; left: 12px; right: 12px; bottom: 112px; display: flex;
+      flex-direction: column; gap: 4px; pointer-events: none;
+    }
+    .cam-log-line {
+      align-self: flex-start; max-width: 88%; font-size: 11px; line-height: 1.5;
+      padding: 6px 10px; border-radius: 8px; background: rgba(4,8,14,0.72);
+      border-left: 2px solid #22d3ee; color: #cfdae8; animation: pop 0.18s ease;
+    }
+    .cam-log-line.ul { border-left-color: #6366f1; }
+    .cam-controls {
+      position: absolute; left: 0; right: 0; bottom: 0; display: flex; gap: 8px;
+      padding: 12px 14px calc(12px + env(safe-area-inset-bottom));
+      background: linear-gradient(to top, rgba(0,0,0,0.8), transparent);
+    }
+    #cam-q {
+      flex: 1; padding: 12px 14px; background: rgba(255,255,255,0.07);
+      border: 1px solid rgba(34,211,238,0.35); border-radius: 10px; color: #dde3ed;
+      font-size: 13px; font-family: inherit; outline: none;
+    }
+    #cam-q::placeholder { color: rgba(221,227,237,0.35); }
+    #cam-scan {
+      padding: 0 22px; background: #22d3ee; border: none; border-radius: 10px;
+      color: #04070c; font-size: 13px; font-weight: 800; letter-spacing: 2px;
+      cursor: pointer; font-family: inherit;
+    }
+    #cam-scan:active { transform: scale(0.96); }
+    #cam-live {
+      padding: 0 14px; background: transparent; border: 1px solid rgba(34,211,238,0.5);
+      border-radius: 10px; color: #22d3ee; font-size: 12px; font-weight: 800;
+      letter-spacing: 1.5px; cursor: pointer; font-family: inherit;
+    }
+    #cam-live:active { transform: scale(0.96); }
+    #cam-live.on {
+      background: rgba(239,68,68,0.18); border-color: rgba(239,68,68,0.55);
+      color: #ef4444; animation: mic-pulse 1s ease-in-out infinite;
+    }
+    #cam-flip {
+      padding: 0 14px; background: rgba(255,255,255,0.08);
+      border: 1px solid rgba(255,255,255,0.15); border-radius: 10px;
+      color: #dde3ed; font-size: 16px; cursor: pointer;
+    }
+
     /* ── TOAST ── */
     #toast {
       position:fixed; top:66px; left:50%; transform:translateX(-50%) translateY(-8px);
+      z-index: 300;
       background:rgba(34,197,94,0.16); border:1px solid rgba(34,197,94,0.4);
       color:var(--green); font-size:12px; font-weight:700; letter-spacing:1px;
       padding:7px 18px; border-radius:99px;
@@ -140,17 +305,50 @@
     <div class="pill" id="pill"><span class="dot"></span><span id="st">Connecting</span></div>
     <div class="enc-badge" id="enc">AES-256</div>
     <div class="spacer"></div>
+    <button id="dev-btn" onclick="toggleDevPanel()" title="Connected devices hub">🛰 <span id="dev-count">0</span></button>
+    <button id="spk-btn" onclick="toggleSpk()" title="JARVIS voice on this device">🔊</button>
     <div class="url">__IP__:__PORT__</div>
   </header>
+  <!-- ── Devices hub panel ───────────────────────────────────────────── -->
+  <div id="dev-panel">
+    <div class="dp-title">◈ DEVICES HUB</div>
+    <div id="dev-list"><div class="dp-empty">loading…</div></div>
+    <div class="dp-paired">paired devices: <span id="dp-paired-n">0</span>
+      <button id="dp-revoke" onclick="revokePaired()">REVOKE ALL</button>
+    </div>
+  </div>
   <main id="feed"></main>
   <footer>
     <input id="inp" placeholder="Send a command to JARVIS…" autocomplete="off">
     <label class="btn-attach" for="file-inp" title="Send file">📎</label>
     <input type="file" id="file-inp" multiple accept="*/*" style="display:none">
+    <button id="cam-btn" onclick="openCamera()" title="Phone camera — EDITH vision">📷</button>
     <button id="mic-btn" onclick="doMic()" title="Voice command">🎤</button>
     <button class="btn btn-wake" id="wake" onclick="doWake()">WAKE</button>
     <button class="btn btn-send" onclick="doSend()">SEND</button>
   </footer>
+
+  <!-- ── EDITH camera overlay ─────────────────────────────────────────── -->
+  <div id="cam-overlay">
+    <video id="cam-video" autoplay playsinline muted></video>
+    <div id="cam-boxes"></div>
+    <div class="cam-scanline"></div>
+    <span class="cf cf-tl"></span><span class="cf cf-tr"></span>
+    <span class="cf cf-bl"></span><span class="cf cf-br"></span>
+    <div class="cam-top">
+      <span class="cam-title">E.D.I.T.H <em>// PHONE OPTICS</em></span>
+      <span class="cam-targets" id="cam-targets">NO TARGETS</span>
+      <button class="cam-x" onclick="closeCamera()" title="Close">✕</button>
+    </div>
+    <div id="cam-log"></div>
+    <div class="cam-status" id="cam-status">INITIALIZING…</div>
+    <div class="cam-controls">
+      <input id="cam-q" placeholder="Ask about what you see… (optional)" autocomplete="off">
+      <button id="cam-live" onclick="toggleLive()" title="Stream camera to PC">LIVE</button>
+      <button id="cam-scan" onclick="doScan()">SCAN</button>
+      <button id="cam-flip" onclick="flipCamera()" title="Flip camera">🔄</button>
+    </div>
+  </div>
 
   <script>
     // ── Auth — bearer token ───────────────────────────────────────────────────
@@ -209,17 +407,29 @@
     const _wsProto = location.protocol === 'https:' ? 'wss' : 'ws';
     const _wsUrl   = `${_wsProto}://${location.host}/ws?token=${encodeURIComponent(_authToken)}`;
     const ws       = new WebSocket(_wsUrl);
+    ws.binaryType  = 'arraybuffer';   // JARVIS voice streams as binary PCM
 
     ws.onopen    = () => { sys('Remote session active.'); toast('Connected to JARVIS'); };
     ws.onclose   = () => sys('Connection lost — refresh to reconnect.');
     ws.onerror   = () => sys('Connection error.');
     ws.onmessage = (e) => {
+      if (typeof e.data !== 'string') { _playSpk(e.data); return; }  // voice frame
       const m = JSON.parse(e.data);
       if (m.type === 'log')           append(m.speaker, m.text);
       if (m.type === 'status')        setStatus(m.state);
       if (m.type === 'wake')          sys('Wake word detected — connecting…');
       if (m.type === 'sys')           sys(m.text);
       if (m.type === 'file_received') _onFileReceived(m);
+      if (m.type === 'devices')       _setDevCount(m.count);
+      if (m.type === 'vision_status') sys(m.state === 'error' ? m.text : 'Phone camera: ' + m.state + '…');
+      if (m.type === 'live_dets') {
+        // PC-side live detection shared back → draw boxes on the phone too
+        if (camOverlay.classList.contains('open') && Array.isArray(m.detections)) {
+          _lastDets = m.detections;
+          _drawBoxes();
+        }
+      }
+      _onVisionMsg(m);
     };
 
     function setStatus(s) {
@@ -405,6 +615,111 @@
       _toastTimer = setTimeout(() => t.classList.remove('show'), 2800);
     }
 
+    // ── JARVIS voice on phone — 24 kHz PCM16 binary frames over /ws ──────────
+    let _spkOn   = true;
+    let _spkCtx  = null;
+    let _spkNext = 0;   // scheduled end-time of the last queued buffer
+
+    function toggleSpk() {
+      _spkOn = !_spkOn;
+      const b = document.getElementById('spk-btn');
+      b.textContent = _spkOn ? '🔊' : '🔇';
+      b.classList.toggle('muted', !_spkOn);
+      toast(_spkOn ? 'JARVIS voice: ON' : 'JARVIS voice: OFF');
+    }
+
+    function _playSpk(buf) {
+      if (!_spkOn) return;
+      try {
+        if (!_spkCtx) _spkCtx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 24000 });
+        const ctx = _spkCtx;
+        if (ctx.state === 'suspended') ctx.resume();   // unlocked by pointerdown below
+        const i16 = new Int16Array(buf);
+        const f32 = new Float32Array(i16.length);
+        for (let i = 0; i < i16.length; i++) f32[i] = i16[i] / 32768;
+        const ab = ctx.createBuffer(1, f32.length, 24000);
+        ab.getChannelData(0).set(f32);
+        const src = ctx.createBufferSource();
+        src.buffer = ab;
+        src.connect(ctx.destination);
+        // fell >1.2 s behind (network hiccup) → resync instead of lagging
+        if (_spkNext - ctx.currentTime > 1.2 || _spkNext < ctx.currentTime)
+          _spkNext = ctx.currentTime + 0.15;   // 150 ms jitter cushion for LAN WiFi
+        src.start(_spkNext);
+        _spkNext += ab.duration;
+      } catch (_) {}
+    }
+
+    // True while JARVIS audio is still queued on this phone's speaker —
+    // used to keep the phone mic from echoing JARVIS back to himself
+    function _spkActive() {
+      return !!(_spkCtx && _spkNext > _spkCtx.currentTime + 0.15);
+    }
+
+    // mobile browsers keep AudioContext suspended until the first user gesture
+    document.addEventListener('pointerdown', () => {
+      if (_spkCtx && _spkCtx.state === 'suspended') _spkCtx.resume();
+    }, { passive: true });
+
+    // ── Devices hub panel ─────────────────────────────────────────────────────
+    function _setDevCount(n) {
+      const c = document.getElementById('dev-count');
+      if (c) c.textContent = (typeof n === 'number') ? n : 0;
+    }
+
+    function toggleDevPanel() {
+      const p = document.getElementById('dev-panel');
+      p.classList.toggle('open');
+      if (p.classList.contains('open')) loadDevices();
+    }
+
+    async function loadDevices() {
+      const list = document.getElementById('dev-list');
+      try {
+        const r = await _authFetch('/api/devices');
+        const d = await r.json();
+        document.getElementById('dp-paired-n').textContent = d.paired || 0;
+        _setDevCount((d.devices || []).length);
+        if (!d.devices || !d.devices.length) {
+          list.innerHTML = '<div class="dp-empty">no remotes connected</div>';
+          return;
+        }
+        list.innerHTML = '';
+        d.devices.forEach(dev => {
+          const mm = String(Math.floor((dev.secs || 0) / 60)).padStart(2, '0');
+          const ss = String((dev.secs || 0) % 60).padStart(2, '0');
+          const row = document.createElement('div');
+          row.className = 'dp-row';
+          row.innerHTML =
+            `<div class="dp-meta"><b>${esc(dev.name)}</b> · ${esc(dev.ip)} <i>· ${mm}:${ss}</i></div>` +
+            `<button class="dp-kick">KICK</button>`;
+          row.querySelector('.dp-kick').addEventListener('click', async () => {
+            await _authFetch('/api/disconnect', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ id: dev.id }),
+            });
+            toast('Device disconnected');
+            loadDevices();
+          });
+          list.appendChild(row);
+        });
+      } catch (_) {
+        list.innerHTML = '<div class="dp-empty">failed to load devices</div>';
+      }
+    }
+
+    async function revokePaired() {
+      try {
+        const r = await _authFetch('/api/revoke-devices', { method: 'POST' });
+        const d = await r.json();
+        document.getElementById('dp-paired-n').textContent = 0;
+        toast(`Revoked ${d.revoked || 0} paired device(s)`);
+      } catch (_) {
+        toast('Revoke failed');
+      }
+    }
+
     // ── Real-time Voice — PCM16 WebSocket → Gemini Live ──────────────────────
     const micBtn  = document.getElementById('mic-btn');
     let _voiceWs  = null;
@@ -446,13 +761,13 @@
         'animation:pop 0.18s ease'
       ].join(';');
       card.innerHTML =
-        '<div style="font-weight:700;color:#818cf8;letter-spacing:.5px;margin-bottom:10px">🎤 One-time voice setup</div>' +
+        '<div style="font-weight:700;color:#818cf8;letter-spacing:.5px;margin-bottom:10px">🎤📷 One-time mic & camera setup</div>' +
         '<ol style="padding-left:18px;color:#8899aa;margin:0;display:flex;flex-direction:column;gap:4px">' +
         '<li>Open a new tab → go to <span style="background:rgba(255,255,255,0.07);padding:1px 6px;border-radius:4px;font-family:monospace;font-size:12px">chrome://flags</span></li>' +
         '<li>Search: <strong style="color:#dde3ed">Insecure origins treated as secure</strong></li>' +
         '<li>Paste this URL into the box:<br><span id="flags-url" style="background:rgba(255,255,255,0.07);padding:2px 8px;border-radius:4px;font-family:monospace;font-size:11px;user-select:all;cursor:pointer">' + esc(origin) + '</span></li>' +
         '<li>Set to <strong style="color:#22c55e">Enabled</strong> → tap <strong style="color:#dde3ed">Relaunch</strong></li>' +
-        '<li>Return here and tap 🎤</li>' +
+        '<li>Return here and tap 🎤 or 📷</li>' +
         '</ol>';
       feed.appendChild(card);
       feed.scrollTop = feed.scrollHeight;
@@ -508,6 +823,7 @@
           // matches PC mic chunk size, prevents queue flooding on the server.
           let _pbuf = [], _plen = 0;
           nd.port.onmessage = e => {
+            if (_spkActive()) return;   // don't echo JARVIS's own voice back to him
             const chunk = new Int16Array(_f32toPcm16(e.data, rate));
             _pbuf.push(chunk); _plen += chunk.length;
             if (_plen >= 1024) {
@@ -523,6 +839,7 @@
           // ScriptProcessor fallback (deprecated, still works everywhere)
           const sp = ctx.createScriptProcessor(4096, 1, 1);
           sp.onaudioprocess = e => {
+            if (_spkActive()) return;   // don't echo JARVIS's own voice back to him
             if (ws.readyState === 1) ws.send(_f32toPcm16(e.inputBuffer.getChannelData(0), rate));
           };
           src.connect(sp); sp.connect(ctx.destination);
@@ -553,6 +870,261 @@
         if (w.readyState < 2) w.close();
       }
       _micIdle();
+    }
+
+    // ── Phone Camera — EDITH Vision ───────────────────────────────────────────
+    const camOverlay = document.getElementById('cam-overlay');
+    const camVideo   = document.getElementById('cam-video');
+    const camBoxes   = document.getElementById('cam-boxes');
+    const camStatus  = document.getElementById('cam-status');
+    const camTargets = document.getElementById('cam-targets');
+    const camLogEl   = document.getElementById('cam-log');
+    let _camStream = null;
+    let _facing    = 'environment';   // back camera by default — point it at the world
+    let _scanning  = false;
+    let _lastDets  = [];
+
+    async function openCamera() {
+      if (!navigator.mediaDevices?.getUserMedia) { _showVoiceSetup(); return; }
+      camOverlay.classList.add('open');
+      if (!_camStream) await _startCamStream();
+    }
+
+    async function _startCamStream() {
+      _stopCamStream();
+      let stream = null;
+      try {
+        stream = await navigator.mediaDevices.getUserMedia({
+          video: { facingMode: { ideal: _facing }, width: { ideal: 1280 } },
+          audio: false,
+        });
+      } catch (_) {
+        try { stream = await navigator.mediaDevices.getUserMedia({ video: true }); }
+        catch (e2) {
+          camStatus.textContent = (e2.name === 'NotAllowedError')
+            ? 'CAMERA DENIED — allow camera in browser settings'
+            : 'CAMERA ERROR: ' + (e2.message || e2.name);
+          return;
+        }
+      }
+      _camStream = stream;
+      camVideo.srcObject = stream;
+      // mirror selfie previews; rear camera stays natural
+      camVideo.style.transform = (_facing === 'user') ? 'scaleX(-1)' : 'none';
+      camStatus.textContent = 'LIVE FEED — TAP SCAN TO IDENTIFY';
+    }
+
+    function _stopCamStream() {
+      if (_camStream) { _camStream.getTracks().forEach(t => t.stop()); _camStream = null; }
+    }
+
+    function closeCamera() {
+      stopLive();
+      camOverlay.classList.remove('open');
+      _stopCamStream();
+      camVideo.srcObject = null;
+      _lastDets = [];
+      camBoxes.innerHTML = '';
+      camTargets.textContent = 'NO TARGETS';
+    }
+
+    async function flipCamera() {
+      stopLive();
+      _facing = (_facing === 'environment') ? 'user' : 'environment';
+      _lastDets = []; camBoxes.innerHTML = '';
+      if (camOverlay.classList.contains('open')) await _startCamStream();
+    }
+
+    function _grabFrame(MAX = 1280, Q = 0.8) {
+      const vw = camVideo.videoWidth, vh = camVideo.videoHeight;
+      if (!vw || !vh) return null;
+      const sc  = Math.min(1, MAX / Math.max(vw, vh));
+      const c   = document.createElement('canvas');
+      c.width   = Math.round(vw * sc);
+      c.height  = Math.round(vh * sc);
+      c.getContext('2d').drawImage(camVideo, 0, 0, c.width, c.height);
+      return (c.toDataURL('image/jpeg', Q).split(',')[1]) || null;
+    }
+
+    function _b64ToBytes(b64) {
+      const bin = atob(b64);
+      const out = new Uint8Array(bin.length);
+      for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+      return out.buffer;
+    }
+
+    // ── LIVE — stream the phone camera onto the PC HUD ──────────────────────
+    let _liveWs = null, _liveTimer = null;
+
+    function toggleLive() {
+      if (_liveWs || _liveTimer) { stopLive(); return; }
+      const wsProto = location.protocol === 'https:' ? 'wss' : 'ws';
+      const ws = new WebSocket(
+        `${wsProto}://${location.host}/ws/phone-cam?token=${encodeURIComponent(_authToken)}`
+      );
+      ws.binaryType = 'arraybuffer';
+
+      ws.onopen = () => {
+        _liveWs = ws;
+        const btn = document.getElementById('cam-live');
+        btn.classList.add('on'); btn.textContent = '⏹';
+        camStatus.textContent = 'STREAMING TO PC — LIVE';
+        toast('📡 Live on PC');
+        // ~3 fps of small JPEGs is plenty for a LAN preview and keeps
+        // bandwidth light for the detection pass that runs alongside
+        _liveTimer = setInterval(() => {
+          if (ws.readyState !== 1) return;
+          const f = _grabFrame(560, 0.55);
+          if (f) ws.send(_b64ToBytes(f));
+        }, 320);
+      };
+      ws.onclose = () => stopLive();
+      ws.onerror = () => stopLive();
+    }
+
+    function stopLive() {
+      if (_liveTimer) { clearInterval(_liveTimer); _liveTimer = null; }
+      if (_liveWs) {
+        const w = _liveWs; _liveWs = null;
+        if (w.readyState < 2) w.close();
+      }
+      const btn = document.getElementById('cam-live');
+      btn.classList.remove('on'); btn.textContent = 'LIVE';
+      if (camOverlay.classList.contains('open'))
+        camStatus.textContent = _lastDets.length ? 'ANALYSIS COMPLETE' : 'LIVE FEED — TAP SCAN TO IDENTIFY';
+    }
+
+    async function doScan() {
+      if (_scanning) return;
+      const frame = _grabFrame();
+      if (!frame) { camStatus.textContent = 'NO VIDEO SIGNAL'; return; }
+      _scanning = true;
+      const btn = document.getElementById('cam-scan');
+      btn.disabled = true; btn.style.opacity = '0.45'; btn.textContent = '···';
+      const qInp = document.getElementById('cam-q');
+      const question = qInp.value.trim();
+      _lastDets = []; camBoxes.innerHTML = '';
+      camStatus.textContent  = 'SCANNING — ANALYZING FEED…';
+      camTargets.textContent = 'PROCESSING…';
+      const headers = Object.assign({ 'Content-Type': 'application/json' }, _authHeader());
+
+      // 1) HUD detection → labeled boxes drawn right here on the overlay
+      fetch('/api/vision-hud', { method: 'POST', headers, body: JSON.stringify({ frame }) })
+        .then(r => r.json())
+        .then(d => {
+          if (d.ok && Array.isArray(d.detections)) { _lastDets = d.detections; _drawBoxes(); }
+          else camTargets.textContent = 'HUD: ' + (d.error || 'OFFLINE');
+        })
+        .catch(() => { camTargets.textContent = 'HUD UPLINK FAILED'; })
+        .finally(() => {
+          _scanning = false; btn.disabled = false;
+          btn.style.opacity = '1'; btn.textContent = 'SCAN';
+        });
+
+      // 2) Full analysis → JARVIS speaks the answer on the PC,
+      //    while the transcript appears here and in the chat feed
+      fetch('/api/vision-scan', { method: 'POST', headers, body: JSON.stringify({ frame, question }) })
+        .then(r => r.json())
+        .then(d => {
+          if (d.ok) { toast('📷 Frame sent to JARVIS'); qInp.value = ''; }
+          else camStatus.textContent = 'SCAN REJECTED: ' + (d.error || 'UNKNOWN');
+        })
+        .catch(() => { camStatus.textContent = 'UPLINK FAILED — CHECK CONNECTION'; });
+    }
+
+    document.getElementById('cam-q').addEventListener('keydown', e => {
+      if (e.key === 'Enter') { e.preventDefault(); doScan(); }
+    });
+
+    function _drawBoxes() {
+      camBoxes.innerHTML = '';
+      const vw = camVideo.videoWidth,  vh = camVideo.videoHeight;
+      const cw = camVideo.clientWidth, ch = camVideo.clientHeight;
+      if (!vw || !vh || !cw || !ch) return;
+      // object-fit: cover geometry — boxes must land on the same pixels as the video
+      const scale = Math.max(cw / vw, ch / vh);
+      const dw = vw * scale, dh = vh * scale;
+      const offX = (dw - cw) / 2, offY = (dh - ch) / 2;
+      const mirror = (_facing === 'user');
+      let persons = 0, vehicles = 0, drawn = 0;
+      _lastDets.slice(0, 12).forEach(d => {
+        if (!Array.isArray(d.box) || d.box.length !== 4) return;
+        let [ymin, xmin, ymax, xmax] = d.box.map(Number);
+        if (![ymin, xmin, ymax, xmax].every(isFinite)) return;
+        const cl = v => Math.max(0, Math.min(1000, v));
+        ymin = cl(ymin); xmin = cl(xmin); ymax = cl(ymax); xmax = cl(xmax);
+        if (xmax - xmin < 5 || ymax - ymin < 5) return;
+        if (mirror) { const t = xmin; xmin = 1000 - xmax; xmax = 1000 - t; }
+        const el = document.createElement('div');
+        el.className = 'tag' +
+          (d.kind === 'person' ? ' tag-p' : d.kind === 'vehicle' ? ' tag-v' : '');
+        // objects, vehicles, landmarks: tap → JARVIS looks it up & explains.
+        // people and plates are intentionally NOT searchable.
+        const _label = String(d.label || '');
+        if (d.kind !== 'person' && !/^PLATE\b/i.test(_label)) {
+          el.classList.add('tag-info');
+          el.addEventListener('click', () => _tagInfo(_label));
+        }
+        el.style.left   = ((xmin / 1000) * dw - offX) + 'px';
+        el.style.top    = ((ymin / 1000) * dh - offY) + 'px';
+        el.style.width  = (((xmax - xmin) / 1000) * dw) + 'px';
+        el.style.height = (((ymax - ymin) / 1000) * dh) + 'px';
+        const lab = document.createElement('span');
+        lab.className = 'tag-l';
+        lab.textContent = String(d.label || 'TARGET').toUpperCase().slice(0, 48);
+        el.appendChild(lab);
+        if (d.detail) {
+          const det = document.createElement('span');
+          det.className = 'tag-d';
+          det.textContent = String(d.detail).slice(0, 70);
+          el.appendChild(det);
+        }
+        camBoxes.appendChild(el);
+        drawn++;
+        if (d.kind === 'person') persons++;
+        else if (d.kind === 'vehicle') vehicles++;
+      });
+      camTargets.textContent = drawn
+        ? `TARGETS: ${drawn} ▸ ${persons} PERSON · ${vehicles} VEHICLE · ${drawn - persons - vehicles} OBJECT`
+        : 'NO TARGETS';
+      if (drawn) camStatus.textContent = 'ANALYSIS COMPLETE — ANSWER INCOMING';
+    }
+
+    window.addEventListener('resize', () => { if (_lastDets.length) _drawBoxes(); });
+    camVideo.addEventListener('resize',  () => { if (_lastDets.length) _drawBoxes(); });
+
+    // ── Tap a tag → JARVIS searches & tells you about that thing ─────────────
+    function _tagInfo(label) {
+      const clean = label.replace(/\s+/g, ' ').trim().slice(0, 60);
+      if (!clean) return;
+      camStatus.textContent = 'LOOKUP: ' + clean.toUpperCase();
+      toast('🔎 ' + clean);
+      const q = `The user tapped the "${clean}" annotation on their phone camera HUD. ` +
+                `Briefly explain what "${clean}" is — search the web if it is a specific ` +
+                `product or place. One or two sentences.`;
+      const enc = _encrypt(q);
+      _authFetch('/api/command', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(enc ? { enc } : { text: q }),
+      });
+    }
+
+    function _onVisionMsg(m) {
+      if (!camOverlay.classList.contains('open')) return;
+      if (m.type === 'vision_status') {
+        if (m.state === 'received')      camStatus.textContent = 'FRAME RECEIVED BY JARVIS';
+        else if (m.state === 'analyzing') camStatus.textContent = 'JARVIS IS ANALYZING…';
+        else if (m.text)                  camStatus.textContent = String(m.text).toUpperCase();
+      }
+      // mirror conversation into the HUD while the overlay is open
+      if (m.type === 'log') {
+        const line = document.createElement('div');
+        line.className = 'cam-log-line' + (m.speaker === 'jarvis' ? '' : ' ul');
+        line.textContent = (m.speaker === 'jarvis' ? 'JARVIS ▸ ' : 'YOU ▸ ') + m.text;
+        camLogEl.appendChild(line);
+        while (camLogEl.children.length > 3) camLogEl.removeChild(camLogEl.firstChild);
+      }
     }
   </script>
 </body>

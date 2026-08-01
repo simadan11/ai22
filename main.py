@@ -941,7 +941,11 @@ class JarvisLive:
                             _audio_data = response.data
                             _SLICE = 2400
                             for _i in range(0, len(_audio_data), _SLICE):
-                                self.audio_in_queue.put_nowait(_audio_data[_i : _i + _SLICE])
+                                _slice = _audio_data[_i : _i + _SLICE]
+                                self.audio_in_queue.put_nowait(_slice)
+                                if self._dashboard:
+                                    # same slice → JARVIS voice plays on the phone too
+                                    self._dashboard.feed_audio(_slice)
 
                     if response.server_content:
                         sc = response.server_content
@@ -1366,6 +1370,192 @@ class JarvisLive:
         self.ui.write_log("SYS: Phone connected via Remote Dashboard.")
         self.ui.notify_phone_connected()
 
+    # ── phone camera vision relay ───────────────────────────────────────────
+
+    async def _relay_phone_vision(self) -> None:
+        """Forward phone-camera frames from the dashboard into the Gemini Live session.
+
+        Flow: phone SCAN → /api/vision-scan queues (frame, question) → inject the
+        image here → JARVIS answers by voice on the PC, and _receive_audio already
+        broadcasts the transcript back to the phone feed (EDITH-style).
+        """
+        import base64 as _b64
+        q = self._dashboard._phone_vision_queue
+        _DEFAULT_Q = (
+            "Identify everything visible — every person (appearance only, no "
+            "identities), every vehicle (color, make/model — quote the license "
+            "plate characters if legible), animals and notable objects."
+        )
+        while True:
+            try:
+                frame, mime_t, question = await asyncio.wait_for(q.get(), timeout=0.5)
+            except asyncio.TimeoutError:
+                continue
+            except Exception as e:
+                print(f"[Dashboard] Vision queue error: {e}")
+                await asyncio.sleep(0.5)
+                continue
+            try:
+                # Phone may scan while JARVIS sleeps — wait up to 10 s for a session
+                for _ in range(100):
+                    if self.session:
+                        break
+                    await asyncio.sleep(0.1)
+                if not self.session:
+                    print("[Dashboard] Dropped phone frame — no active session")
+                    await self._dashboard.broadcast({
+                        "type": "vision_status", "state": "error",
+                        "text": "JARVIS is offline on the PC — start it, then scan again.",
+                    })
+                    continue
+                # Don't collide with a PC-side screen/camera vision cycle
+                for _ in range(150):  # up to 15 s
+                    if not self._vision_busy:
+                        break
+                    await asyncio.sleep(0.1)
+
+                await self._dashboard.broadcast(
+                    {"type": "vision_status", "state": "analyzing"}
+                )
+                q_text = (
+                    "[PHONE CAMERA] The user pointed their phone camera at the real "
+                    "world and pressed SCAN. The attached image is what their phone "
+                    "sees right now. Answer in the user's language, concisely, like "
+                    "a tactical heads-up display report. Identify visible people by "
+                    "appearance/clothing/pose only — never guess a real name or "
+                    "identity, and never dig up personal data about anyone. "
+                    "For vehicles: color and make/model when recognizable; if a "
+                    "license plate is legible, quote its characters only. "
+                    f"User's question: {question or _DEFAULT_Q}"
+                )
+                b64 = _b64.b64encode(frame).decode("ascii")
+                await self.session.send_client_content(
+                    turns={"parts": [
+                        {"inline_data": {"mime_type": mime_t, "data": b64}},
+                        {"text": q_text},
+                    ]},
+                    turn_complete=True,
+                )
+                print(f"[Dashboard] 📷 Phone frame {len(frame):,} bytes → live session")
+                self.ui.write_log(f"[PhoneCam]: {question or 'auto-scan'}")
+                if question:
+                    await self._dashboard.broadcast({
+                        "type": "log", "speaker": "user",
+                        "text": f"📷 {question}",
+                        "ts": datetime.now().isoformat(),
+                    })
+                # EDITH snapshot with labeled boxes on the PC screen too
+                asyncio.create_task(self._pc_scan_overlay(frame))
+            except Exception as e:
+                print(f"[Dashboard] Vision relay error: {e}")
+                await asyncio.sleep(0.5)
+
+    async def _pc_scan_overlay(self, frame: bytes) -> None:
+        """Detect people/vehicles/objects in the phone's frame and paint the
+        labeled snapshot onto the PC window's HUD area."""
+        try:
+            from dashboard.server import _edith_detect
+            dets = await asyncio.to_thread(_edith_detect, frame)
+            if dets and hasattr(self.ui, "show_phone_scan"):
+                self.ui.show_phone_scan(frame, dets)
+                print(f"[Dashboard] 🖥️  Scan overlay: {len(dets)} target(s) on PC HUD")
+        except Exception as e:
+            print(f"[Dashboard] PC scan overlay failed: {e}")
+
+    # ── phone camera live stream relay ───────────────────────────────────
+
+    async def _relay_phone_cam(self) -> None:
+        """Live phone-camera frames → PC HUD area. While streaming, a background
+        detection pass (~every 1.4 s) refreshes EDITH boxes on PC and phone."""
+        q = self._dashboard._phone_cam_queue
+        live = False
+        last_det = 0.0
+        det_task = None
+        
+        # Load Haar cascades for face & eye tracking zoom
+        import cv2
+        import numpy as np
+        face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_frontalface_default.xml')
+        eye_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_eye.xml')
+
+        while True:
+            try:
+                frame = await asyncio.wait_for(q.get(), timeout=0.8)
+            except asyncio.TimeoutError:
+                if live:   # stream went quiet — hide the PC overlay
+                    live = False
+                    last_det = 0.0
+                    try:
+                        self.ui.stop_phone_cam()
+                    except Exception:
+                        pass
+                continue
+            except Exception as e:
+                print(f"[Dashboard] Cam queue error: {e}")
+                await asyncio.sleep(0.5)
+                continue
+                
+            # Process frame to detect eye and zoom
+            try:
+                np_arr = np.frombuffer(frame, np.uint8)
+                img = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
+                if img is not None:
+                    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+                    faces = face_cascade.detectMultiScale(gray, 1.3, 5)
+                    for (x, y, w, h) in faces:
+                        roi_gray = gray[y:y+h, x:x+w]
+                        roi_color = img[y:y+h, x:x+w]
+                        eyes = eye_cascade.detectMultiScale(roi_gray, 1.1, 4)
+                        if len(eyes) > 0:
+                            ex, ey, ew, eh = eyes[0]
+                            margin_x = int(ew * 0.5)
+                            margin_y = int(eh * 0.5)
+                            eye_y1 = max(0, ey - margin_y)
+                            eye_y2 = min(roi_color.shape[0], ey + eh + margin_y)
+                            eye_x1 = max(0, ex - margin_x)
+                            eye_x2 = min(roi_color.shape[1], ex + ew + margin_x)
+                            eye_crop = roi_color[eye_y1:eye_y2, eye_x1:eye_x2]
+                            if eye_crop.size > 0:
+                                zoomed = cv2.resize(eye_crop, (img.shape[1], img.shape[0]), interpolation=cv2.INTER_LINEAR)
+                                cv2.putText(zoomed, "Eye Track & Zoom (Phone)", (20, 40), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
+                                _, buf = cv2.imencode('.jpg', zoomed, [cv2.IMWRITE_JPEG_QUALITY, 65])
+                                frame = buf.tobytes()
+                            break
+            except Exception as e:
+                pass # fall back to original frame
+                
+            if not live:
+                live = True
+                try:
+                    self.ui.start_phone_cam()
+                    self.ui.write_log("SYS: Phone camera live on PC HUD.")
+                except Exception:
+                    pass
+            try:
+                self.ui.show_phone_cam_frame(frame)
+            except Exception:
+                pass
+            now = time.monotonic()
+            if now - last_det >= 1.4 and (det_task is None or det_task.done()):
+                last_det = now
+                det_task = asyncio.create_task(self._live_detect_task(frame))
+
+    async def _live_detect_task(self, frame: bytes) -> None:
+        """One background detection pass over the freshest live frame."""
+        try:
+            from dashboard.server import _edith_detect
+            dets = await asyncio.to_thread(_edith_detect, frame)
+        except Exception as e:
+            print(f"[Dashboard] Live detection failed: {e}")
+            return
+        if not dets or not self._dashboard._cam_stream_active:
+            return  # stream stopped while the model was thinking
+        try:
+            self.ui.show_phone_cam_dets(dets)
+        except Exception:
+            pass
+        await self._dashboard.broadcast({"type": "live_dets", "detections": dets})
+
     # ── dashboard command relay ─────────────────────────────────────────────
 
     async def _process_dashboard_commands(self) -> None:
@@ -1406,8 +1596,23 @@ class JarvisLive:
             self._dashboard = DashboardServer()
             self._dashboard.set_connect_callback(self._on_phone_connected)
             asyncio.create_task(self._dashboard.serve())
+            # Wire the Remote overlay's device hub (list + kick + revoke)
+            def _kick_device(did: str) -> None:
+                if not self._dashboard:
+                    return
+                if did == "revoke":
+                    n = self._dashboard.revoke_all_paired()
+                    self.ui.write_log(f"SYS: {n} paired device(s) revoked.")
+                    return
+                if self._loop:
+                    asyncio.run_coroutine_threadsafe(
+                        self._dashboard.disconnect_device(did), self._loop
+                    )
+            self.ui.set_device_callbacks(self._dashboard.devices_info, _kick_device)
             # Runs for the whole lifetime, not just inside an active session
             asyncio.create_task(self._process_dashboard_commands())
+            asyncio.create_task(self._relay_phone_vision())
+            asyncio.create_task(self._relay_phone_cam())
         except Exception as e:
             print(f"[Dashboard] Disabled: {e}")
             self._dashboard = None
@@ -1478,7 +1683,13 @@ class JarvisLive:
                 traceback.print_exc()
 
                 # Invalid API key — stop hammering the API, prompt re-configuration
-                if "API key not valid" in err_str or "1007" in err_str:
+                _auth_err = any(k in err_str for k in (
+                    "API key not valid", "API_KEY_INVALID",
+                    "invalid authentication credentials",
+                    "ACCESS_TOKEN_TYPE_UNSUPPORTED",
+                    "UNAUTHENTICATED", "1007", "1008",
+                ))
+                if _auth_err:
                     self.ui.write_log("ERR: API key invalid — please re-enter your key.")
                     self.ui.set_state("SLEEPING")
                     self.ui.prompt_reconfig()
