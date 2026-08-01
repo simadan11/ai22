@@ -45,9 +45,24 @@ It's not just an assistant — it's an extension of your digital life.
 | 🖱️ Desktop Control | Taskbar, window management, and desktop-level operations |
 | 🧑‍💻 Silent Language Memory | Detects spoken language on first use — all future sessions adapt automatically |
 | 📱 Remote Dashboard | Control the assistant from your phone via QR code pairing |
+| 📷 Phone Camera Vision | EDITH-style scan from the phone camera — detects & labels people and objects on a live HUD, JARVIS answers by voice |
 | ⚡ Auto-Start on Boot | Registers with the OS startup system (registry / LaunchAgent / .desktop) |
 | 📋 Clipboard Intelligence | Copy any text → floating panel with Translate / Summarise / Explain / Fix |
 | 🎨 Assistant Customization | Change the assistant name and your name from the UI — takes effect immediately |
+
+---
+
+## 📷 Phone Camera Vision — EDITH Mode
+
+The Remote Dashboard now turns your phone into JARVIS's eyes, Spider-Man style:
+
+1. On your PC, press **Remote Control** and pair your phone with the QR code.
+2. Tap **📷** in the dashboard footer — a full-screen tactical HUD opens with your live camera feed (corner brackets, scanline, back/front camera toggle).
+3. Tap **SCAN** (optionally type a question like *"who is in the room?"* or *"what is on my desk?"*):
+   - **HUD detection** — the server scans the frame and your phone draws labeled boxes over the live video: people are outlined in orange, objects in cyan, each with a short tactical label (`PERSON — RED JACKET`, `LAPTOP`, `CAR KEYS…`).
+   - **Voice answer** — the same frame is injected into the main Gemini Live session, so JARVIS speaks a concise report out loud on the PC and its transcript appears in your phone feed and on the HUD.
+
+> ⚠️ For privacy and safety, people are described by appearance/clothing/pose only — the AI never guesses real-world identities. Camera access on `http://` origins needs the same one-time Chrome flag as the microphone (the app shows setup instructions automatically on first tap).
 
 ---
 

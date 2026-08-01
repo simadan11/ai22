@@ -1366,6 +1366,80 @@ class JarvisLive:
         self.ui.write_log("SYS: Phone connected via Remote Dashboard.")
         self.ui.notify_phone_connected()
 
+    # ── phone camera vision relay ───────────────────────────────────────────
+
+    async def _relay_phone_vision(self) -> None:
+        """Forward phone-camera frames from the dashboard into the Gemini Live session.
+
+        Flow: phone SCAN → /api/vision-scan queues (frame, question) → inject the
+        image here → JARVIS answers by voice on the PC, and _receive_audio already
+        broadcasts the transcript back to the phone feed (EDITH-style).
+        """
+        import base64 as _b64
+        q = self._dashboard._phone_vision_queue
+        _DEFAULT_Q = (
+            "Identify everything visible — every person (describe appearance only, "
+            "never guess identity) and every notable object."
+        )
+        while True:
+            try:
+                frame, mime_t, question = await asyncio.wait_for(q.get(), timeout=0.5)
+            except asyncio.TimeoutError:
+                continue
+            except Exception as e:
+                print(f"[Dashboard] Vision queue error: {e}")
+                await asyncio.sleep(0.5)
+                continue
+            try:
+                # Phone may scan while JARVIS sleeps — wait up to 10 s for a session
+                for _ in range(100):
+                    if self.session:
+                        break
+                    await asyncio.sleep(0.1)
+                if not self.session:
+                    print("[Dashboard] Dropped phone frame — no active session")
+                    await self._dashboard.broadcast({
+                        "type": "vision_status", "state": "error",
+                        "text": "JARVIS is offline on the PC — start it, then scan again.",
+                    })
+                    continue
+                # Don't collide with a PC-side screen/camera vision cycle
+                for _ in range(150):  # up to 15 s
+                    if not self._vision_busy:
+                        break
+                    await asyncio.sleep(0.1)
+
+                await self._dashboard.broadcast(
+                    {"type": "vision_status", "state": "analyzing"}
+                )
+                q_text = (
+                    "[PHONE CAMERA] The user pointed their phone camera at the real "
+                    "world and pressed SCAN. The attached image is what their phone "
+                    "sees right now. Answer in the user's language, concisely, like "
+                    "a tactical heads-up display report. Identify visible people by "
+                    "appearance/clothing/pose only — never guess a real name or identity. "
+                    f"User's question: {question or _DEFAULT_Q}"
+                )
+                b64 = _b64.b64encode(frame).decode("ascii")
+                await self.session.send_client_content(
+                    turns={"parts": [
+                        {"inline_data": {"mime_type": mime_t, "data": b64}},
+                        {"text": q_text},
+                    ]},
+                    turn_complete=True,
+                )
+                print(f"[Dashboard] 📷 Phone frame {len(frame):,} bytes → live session")
+                self.ui.write_log(f"[PhoneCam]: {question or 'auto-scan'}")
+                if question:
+                    await self._dashboard.broadcast({
+                        "type": "log", "speaker": "user",
+                        "text": f"📷 {question}",
+                        "ts": datetime.now().isoformat(),
+                    })
+            except Exception as e:
+                print(f"[Dashboard] Vision relay error: {e}")
+                await asyncio.sleep(0.5)
+
     # ── dashboard command relay ─────────────────────────────────────────────
 
     async def _process_dashboard_commands(self) -> None:
@@ -1408,6 +1482,7 @@ class JarvisLive:
             asyncio.create_task(self._dashboard.serve())
             # Runs for the whole lifetime, not just inside an active session
             asyncio.create_task(self._process_dashboard_commands())
+            asyncio.create_task(self._relay_phone_vision())
         except Exception as e:
             print(f"[Dashboard] Disabled: {e}")
             self._dashboard = None

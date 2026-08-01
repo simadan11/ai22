@@ -11,6 +11,7 @@ Install deps:  pip install fastapi "uvicorn[standard]" cryptography
 import asyncio
 import base64
 import hashlib
+import json
 import re
 import secrets
 import socket
@@ -364,6 +365,99 @@ def _read(name: str) -> str:
     return (STATIC_DIR / name).read_text(encoding="utf-8")
 
 
+# ── Phone camera — EDITH-style HUD detection ──────────────────────────────────
+
+_HUD_MODEL = "gemini-2.5-flash"
+_MAX_FRAME_BYTES = 8 * 1024 * 1024   # decoded JPEG cap
+
+_HUD_PROMPT = (
+    "You are a tactical augmented-reality vision system (like EDITH from Spider-Man). "
+    "Look at the photo and list every PERSON and every notable OBJECT, animal, "
+    "readable text block or screen. Return ONLY a JSON array. Each element has exactly: "
+    '"label": 2-5 word uppercase name, e.g. "PERSON — RED JACKET", "LAPTOP", "CAR KEYS"; '
+    '"kind": "person" or "object"; '
+    '"detail": one short phrase (max 10 words) with visible appearance/context, '
+    'e.g. "male, glasses, holding coffee cup"; '
+    '"box": [ymin, xmin, ymax, xmax] as integers 0-1000 in normalized image '
+    "coordinates, tight around the target. "
+    "Rules: for people describe ONLY visible appearance/clothing/pose — never guess "
+    "real names or identities. Prefer precise small boxes over big loose ones. "
+    "Max 12 items. If nothing notable is visible return []."
+)
+
+
+class _FrameError(Exception):
+    def __init__(self, msg: str, status: int):
+        super().__init__(msg)
+        self.status = status
+
+
+def _decode_frame(body: dict) -> bytes:
+    """Decode a base64 JPEG frame from a JSON request body."""
+    b64 = str(body.get("frame") or "").strip()
+    if not b64:
+        raise _FrameError("frame is required", 400)
+    # tolerate data-URL payloads sent by some clients
+    if "," in b64 and b64[:32].lower().startswith("data:"):
+        b64 = b64.split(",", 1)[1]
+    try:
+        raw = base64.b64decode(b64, validate=True)
+    except Exception:
+        raw = base64.b64decode(b64 + "=" * (-len(b64) % 4))
+    if not raw or len(raw) > _MAX_FRAME_BYTES:
+        raise _FrameError(
+            f"frame too large (max {_MAX_FRAME_BYTES // (1024 * 1024)} MB)", 413
+        )
+    return raw
+
+
+def _edith_detect(image_bytes: bytes) -> list[dict]:
+    """Blocking Gemini call → normalized list of HUD detections. Raises on failure."""
+    from google import genai as _g
+    from google.genai import types as _gt
+
+    key = _get_gemini_key()
+    if not key:
+        raise RuntimeError("gemini_api_key not configured")
+    client = _g.Client(api_key=key)
+    resp = client.models.generate_content(
+        model=_HUD_MODEL,
+        contents=[
+            _gt.Part.from_bytes(data=image_bytes, mime_type="image/jpeg"),
+            _HUD_PROMPT,
+        ],
+        config=_gt.GenerateContentConfig(
+            response_mime_type="application/json",
+            temperature=0.2,
+        ),
+    )
+    data = json.loads((resp.text or "").strip() or "[]")
+    if isinstance(data, dict):           # model wrapped the array in an object
+        data = next((v for v in data.values() if isinstance(v, list)), [])
+    if not isinstance(data, list):
+        return []
+    out: list[dict] = []
+    for item in data:
+        if not isinstance(item, dict):
+            continue
+        box = item.get("box") or item.get("box_2d")
+        if not (isinstance(box, (list, tuple)) and len(box) == 4):
+            continue
+        try:
+            box = [float(x) for x in box]
+        except (TypeError, ValueError):
+            continue
+        out.append({
+            "label":  str(item.get("label") or "TARGET")[:60],
+            "kind":   "person" if str(item.get("kind", "")).lower() == "person" else "object",
+            "detail": str(item.get("detail") or "")[:120],
+            "box":    box,
+        })
+        if len(out) >= 12:
+            break
+    return out
+
+
 # ── DashboardServer ───────────────────────────────────────────────────────────
 
 class DashboardServer:
@@ -381,6 +475,7 @@ class DashboardServer:
         self._pending_keys: dict[str, float] = {}
         self._device_sessions: dict[str, dict] = {}  # device_token → {session_key}
         self._phone_audio_queue: asyncio.Queue    = asyncio.Queue(maxsize=200)
+        self._phone_vision_queue: asyncio.Queue   = asyncio.Queue(maxsize=10)
         self._uploads_dir                 = UPLOADS_DIR
         self._login_html                  = _read("login.html")
         self._app_html                    = _read("app.html")
@@ -603,6 +698,69 @@ class DashboardServer:
             if self._wake_callback:
                 self._wake_callback()
             return JSONResponse({"ok": True})
+
+        # ── Phone camera — EDITH vision ───────────────────────────────────────
+
+        @app.post("/api/vision-scan")
+        async def vision_scan(req: Request):
+            """Phone camera frame → queued for the main Gemini Live session.
+
+            main.py::_relay_phone_vision injects the frame + question into the
+            live session, JARVIS answers by voice on the PC, and the transcript
+            is broadcast back to every phone feed automatically.
+            """
+            if not _auth(req):
+                return JSONResponse({"ok": False, "error": "Unauthorized"}, status_code=401)
+            try:
+                body = await req.json()
+            except Exception:
+                return JSONResponse({"ok": False, "error": "Bad JSON"}, status_code=400)
+            try:
+                frame = _decode_frame(body)
+            except _FrameError as e:
+                return JSONResponse({"ok": False, "error": str(e)}, status_code=e.status)
+            except Exception:
+                return JSONResponse({"ok": False, "error": "Bad frame"}, status_code=400)
+
+            question = str(body.get("question") or "").strip()[:500]
+            try:
+                self._phone_vision_queue.put_nowait((frame, "image/jpeg", question))
+            except asyncio.QueueFull:
+                # Latest view is always more relevant — evict the oldest frame
+                try:
+                    self._phone_vision_queue.get_nowait()
+                    self._phone_vision_queue.put_nowait((frame, "image/jpeg", question))
+                except Exception:
+                    pass
+
+            if self._wake_callback:
+                self._wake_callback()
+            asyncio.create_task(self.broadcast(
+                {"type": "vision_status", "state": "received"}
+            ))
+            return JSONResponse({"ok": True})
+
+        @app.post("/api/vision-hud")
+        async def vision_hud(req: Request):
+            """EDITH-style detection: frame → labeled boxes drawn on the phone HUD."""
+            if not _auth(req):
+                return JSONResponse({"ok": False, "error": "Unauthorized"}, status_code=401)
+            try:
+                body = await req.json()
+            except Exception:
+                return JSONResponse({"ok": False, "error": "Bad JSON"}, status_code=400)
+            try:
+                frame = _decode_frame(body)
+            except _FrameError as e:
+                return JSONResponse({"ok": False, "error": str(e)}, status_code=e.status)
+            except Exception:
+                return JSONResponse({"ok": False, "error": "Bad frame"}, status_code=400)
+            try:
+                detections = await asyncio.to_thread(_edith_detect, frame)
+            except Exception as e:
+                print(f"[Dashboard] HUD detection failed: {e}")
+                return JSONResponse({"ok": False, "error": str(e)[:200]}, status_code=502)
+            return JSONResponse({"ok": True, "detections": detections})
 
         # ── Phone mic real-time audio → Gemini Live ──────────────────────────
 
