@@ -24,6 +24,8 @@ import math
 import os
 import threading
 import time
+import subprocess  # noqa: F401  (used by _spawn_worker)
+import sys
 import urllib.request
 from pathlib import Path
 
@@ -102,8 +104,11 @@ class PoseTracker:
         self._cv2 = None
         self._last_err = ""
         self._smooth: dict = {}    # exponential smoothing state
-        self._last_ts = 0          # strictly-increasing MediaPipe timestamp
         self._fails = 0            # consecutive backend failures
+        self._proc = None          # isolated MediaPipe worker process
+        self._restarts = 0         # worker crashes this session (never
+                                   # cleared by a lucky frame — a flaky
+                                   # backend must degrade, not oscillate)
 
     # ── availability ────────────────────────────────────────────────────
     @property
@@ -137,30 +142,23 @@ class PoseTracker:
                 self._mode, self._last_err = "off", f"numpy/cv2 missing: {e}"
                 return
 
-            # 1) MediaPipe pose + segmentation
+            # 1) MediaPipe pose + segmentation — in an isolated child process.
+            #    Importing mediapipe here would load native code into THIS
+            #    process, so we only check that it is installed and let the
+            #    worker do the actual loading.
             try:
-                from mediapipe.tasks import python as mp_python
-                from mediapipe.tasks.python import vision as mp_vision
-
-                model = _ensure_model()
-                if model is None:
-                    raise RuntimeError("pose model unavailable")
-                opts = mp_vision.PoseLandmarkerOptions(
-                    base_options=mp_python.BaseOptions(
-                        model_asset_path=str(model)
-                    ),
-                    running_mode=mp_vision.RunningMode.VIDEO,
-                    num_poses=self._max_people,
-                    min_pose_detection_confidence=0.5,
-                    min_tracking_confidence=0.5,
-                    output_segmentation_masks=True,
-                )
-                self._mp = mp_vision.PoseLandmarker.create_from_options(opts)
+                import importlib.util
+                if importlib.util.find_spec("mediapipe") is None:
+                    raise RuntimeError("mediapipe not installed")
+                if not self._spawn_worker():
+                    raise RuntimeError(self._last_err or "worker failed")
                 self._mode = "mediapipe"
-                print("[PoseTracker] Backend: MediaPipe (skeleton + silhouette)")
+                print("[PoseTracker] Backend: MediaPipe worker "
+                      "(skeleton + silhouette, crash-isolated)")
                 return
             except Exception as e:
                 self._last_err = f"mediapipe: {e}"
+                self._kill_worker()
 
             # 2) OpenCV HOG people detector
             try:
@@ -215,7 +213,9 @@ class PoseTracker:
         except BaseException as e:      # never let a backend kill the app
             self._fails += 1
             print(f"[PoseTracker] track failed ({self._fails}): {e}")
-            if self._fails >= 5:
+            # A repeatedly dying worker is unrecoverable — drop to HOG fast so
+            # the HUD keeps working instead of stuttering on every frame.
+            if self._fails >= 3 or self._restarts >= 3:
                 self._degrade()
             return []
 
@@ -223,12 +223,7 @@ class PoseTracker:
         """A backend misbehaved repeatedly — drop to the next safest one."""
         with self._lock:
             if self._mode == "mediapipe":
-                try:
-                    if self._mp is not None:
-                        self._mp.close()
-                except Exception:
-                    pass
-                self._mp = None
+                self._kill_worker()
                 try:
                     hog = self._cv2.HOGDescriptor()
                     hog.setSVMDetector(
@@ -244,212 +239,183 @@ class PoseTracker:
                 self._mode = "off"
                 print("[PoseTracker] Disabled after repeated failures")
             self._fails = 0
+            self._restarts = 0
             self._smooth.clear()
 
     def reset(self) -> None:
-        """Clear smoothing state (call when the stream stops)."""
+        """Clear tracking state and stop the worker (call when the stream ends)."""
         self._smooth.clear()
-
-    # ── MediaPipe backend ───────────────────────────────────────────────
-    def _track_mediapipe(self, bgr) -> list[dict]:
-        import mediapipe as mp
-        np, cv2 = self._np, self._cv2
-
-        h, w = bgr.shape[:2]
-        rgb = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
-        # MediaPipe keeps a reference to the buffer — hand it a private,
-        # contiguous copy so nothing mutates underneath the native code.
-        rgb = np.ascontiguousarray(rgb, dtype=np.uint8)
-        image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb)
-
-        # CRITICAL: VIDEO mode aborts the *process* if timestamps are not
-        # strictly increasing, and the landmarker is not thread-safe. Both are
-        # guaranteed here by the lock + monotonic counter.
+        self._restarts = 0
         with self._lock:
-            ts = max(int(time.monotonic() * 1000), self._last_ts + 1)
-            self._last_ts = ts
-            res = self._mp.detect_for_video(image, ts)
+            self._kill_worker()
 
-        out: list[dict] = []
-        lms = getattr(res, "pose_landmarks", None) or []
-        masks = getattr(res, "segmentation_masks", None) or []
+    def shutdown(self) -> None:
+        """Terminate the worker process (call on application exit)."""
+        with self._lock:
+            self._kill_worker()
 
-        for i, person in enumerate(lms[: self._max_people]):
-            pts = {}
-            xs, ys = [], []
-            for name, idx in _MP_IDX.items():
-                if idx >= len(person):
-                    continue
-                lm = person[idx]
-                vis = getattr(lm, "visibility", 1.0)
-                if vis is not None and vis < 0.35:
-                    continue
-                x, y = float(lm.x), float(lm.y)
-                if not (math.isfinite(x) and math.isfinite(y)):
-                    continue
-                pts[name] = (y, x)
-                xs.append(x); ys.append(y)
-            if len(pts) < 4:
+    # ── MediaPipe backend (runs in an isolated child process) ───────────
+    #
+    # MediaPipe is native C++ and calls abort() on contract violations, OOM or
+    # bad tensors. SIGABRT CANNOT be caught by Python try/except — in-process
+    # it would kill the whole JARVIS window. So it lives in its own process:
+    # if it dies, we just restart it and the UI never notices.
+
+    def _spawn_worker(self) -> bool:
+        import subprocess
+        model = _ensure_model()
+        if model is None:
+            return False
+        worker = Path(__file__).resolve().parent / "pose_worker.py"
+        if not worker.exists():
+            return False
+        creation = {}
+        if os.name == "nt":                     # never flash a console window
+            creation["creationflags"] = 0x08000000      # CREATE_NO_WINDOW
+        try:
+            self._proc = subprocess.Popen(
+                [sys.executable, str(worker), str(model), str(self._max_people)],
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                stderr=None,
+                bufsize=0,
+                **creation,
+            )
+        except Exception as e:
+            self._last_err = f"worker spawn: {e}"
+            self._proc = None
+            return False
+
+        ready = self._recv(timeout=90.0)        # first run may download nothing
+        if not ready or not ready.get("ready"):
+            self._kill_worker()
+            self._last_err = f"worker init: {(ready or {}).get('fatal', 'no reply')}"
+            return False
+        return True
+
+    def _kill_worker(self) -> None:
+        p, self._proc = self._proc, None
+        if p is None:
+            return
+        try:
+            if p.stdin and not p.stdin.closed:
+                p.stdin.close()
+        except Exception:
+            pass
+        try:
+            p.terminate()
+            p.wait(timeout=2)
+        except Exception:
+            try:
+                p.kill()
+            except Exception:
+                pass
+
+    def _recv(self, timeout: float) -> dict | None:
+        """Read one length-prefixed JSON reply from the worker."""
+        p = self._proc
+        if p is None or p.stdout is None:
+            return None
+        import json as _json
+        import struct as _struct
+
+        result: dict = {}
+
+        def _reader():
+            try:
+                head = p.stdout.read(4)
+                # A crashed worker closes the pipe → read() returns b"" at
+                # once, so we fail fast instead of burning the full timeout.
+                if not head or len(head) < 4:
+                    return
+                (n,) = _struct.unpack(">I", head)
+                if n <= 0 or n > 64 * 1024 * 1024:
+                    return
+                buf = b""
+                while len(buf) < n:
+                    chunk = p.stdout.read(n - len(buf))
+                    if not chunk:
+                        return
+                    buf += chunk
+                result["v"] = _json.loads(buf.decode("utf-8"))
+            except Exception:
+                pass
+
+        t = threading.Thread(target=_reader, daemon=True)
+        t.start()
+
+        # NOTE: the reader may sit in a blocking read() that never returns —
+        # a crashed child does not always close its write end of the pipe. So
+        # we watch the *process* as well and bail out as soon as it dies,
+        # instead of stalling the video feed for the whole timeout. The
+        # orphaned reader thread is a daemon and dies with the pipe.
+        deadline = time.monotonic() + timeout
+        dead_since = None
+        while t.is_alive():
+            t.join(0.02)
+            if not t.is_alive():
+                break
+            if p.poll() is not None:
+                if dead_since is None:
+                    dead_since = time.monotonic()
+                elif time.monotonic() - dead_since > 0.2:
+                    return None                 # crashed → fail fast
+            if time.monotonic() >= deadline:
+                return None                     # hung → give up
+        return result.get("v")
+
+    def _track_mediapipe(self, frame_bytes: bytes) -> list[dict]:
+        """Send the raw JPEG to the worker process and read back detections."""
+        import struct as _struct
+
+        with self._lock:
+            if self._proc is None or self._proc.poll() is not None:
+                if self._proc is not None:
+                    print("[PoseTracker] Worker died — restarting")
+                    self._kill_worker()
+                    self._restarts += 1
+                    self._smooth.clear()
+                if self._restarts >= 3:
+                    raise RuntimeError("worker keeps dying")
+                if not self._spawn_worker():
+                    raise RuntimeError(self._last_err or "worker unavailable")
+
+            try:
+                self._proc.stdin.write(_struct.pack(">I", len(frame_bytes)))
+                self._proc.stdin.write(frame_bytes)
+                self._proc.stdin.flush()
+            except Exception as e:
+                self._kill_worker()
+                raise RuntimeError(f"worker write: {e}") from None
+
+            # A worker that died on the previous frame may only be reaped now;
+            # keep the per-frame budget small so the feed never visibly stalls.
+            reply = self._recv(timeout=2.5)
+            if reply is None:
+                rc = self._proc.poll() if self._proc else None
+                self._kill_worker()
+                self._restarts += 1
+                raise RuntimeError(
+                    f"worker crashed (exit {rc})" if rc is not None
+                    else "worker timeout"
+                )
+
+        dets = reply.get("dets") or []
+        out = []
+        for i, d in enumerate(dets):
+            if not isinstance(d, dict):
                 continue
-
-            pose = self._to_hud_joints(pts)
-            box = self._box_from(xs, ys)
-            outline = []
-            if i < len(masks):
-                outline = self._mask_outline(masks[i], w, h)
-            if not outline:
-                outline = self._pose_outline(pose)
-
-            key = f"p{i}"
-            pose, outline, box = self._smooth_person(key, pose, outline, box)
-
-            out.append({
-                "kind":    "person",
-                "label":   "PERSON — TRACKED",
-                "detail":  "live local tracking",
-                "box":     box,
-                "pose":    pose,
-                "outline": outline,
-                "source":  "local",
-            })
+            pose = d.get("pose") or {}
+            outline = d.get("outline") or []
+            box = d.get("box") or []
+            if len(box) != 4:
+                continue
+            pose, outline, box = self._smooth_person(f"p{i}", pose, outline, box)
+            d["pose"], d["outline"], d["box"] = pose, outline, box
+            out.append(d)
         if not out:
             self._smooth.clear()
         return out
-
-    @staticmethod
-    def _to_hud_joints(pts: dict) -> dict:
-        """MediaPipe landmark set → the joint names the HUD draws."""
-
-        def mid(a, b):
-            pa, pb = pts.get(a), pts.get(b)
-            if pa and pb:
-                return [(pa[0] + pb[0]) / 2, (pa[1] + pb[1]) / 2]
-            return None
-
-        j: dict = {}
-        # head: prefer the eye/ear midpoint, else the nose
-        head = mid("l_ear", "r_ear") or mid("l_eye", "r_eye")
-        if head is None and "nose" in pts:
-            head = [pts["nose"][0], pts["nose"][1]]
-        neck = mid("l_shoulder", "r_shoulder")
-        pelvis = mid("l_hip", "r_hip")
-        if head and neck:
-            # nudge the head marker up a little so it sits on the skull
-            head = [head[0] - abs(neck[0] - head[0]) * 0.35, head[1]]
-        if head:
-            j["head"] = head
-        if neck:
-            j["neck"] = neck
-        if pelvis:
-            j["pelvis"] = pelvis
-        for name in ("l_shoulder", "r_shoulder", "l_elbow", "r_elbow",
-                     "l_wrist", "r_wrist", "l_hip", "r_hip",
-                     "l_knee", "r_knee", "l_ankle", "r_ankle"):
-            if name in pts:
-                j[name] = [pts[name][0], pts[name][1]]
-        # scale 0-1 → 0-1000 for the HUD
-        return {k: [round(v[0] * 1000, 1), round(v[1] * 1000, 1)]
-                for k, v in j.items() if k in _HUD_JOINTS}
-
-    @staticmethod
-    def _box_from(xs, ys) -> list:
-        pad_x = (max(xs) - min(xs)) * 0.12 + 0.02
-        pad_y = (max(ys) - min(ys)) * 0.10 + 0.03
-        cl = lambda v: max(0.0, min(1000.0, v * 1000))   # noqa: E731
-        return [round(cl(min(ys) - pad_y), 1), round(cl(min(xs) - pad_x), 1),
-                round(cl(max(ys) + pad_y), 1), round(cl(max(xs) + pad_x), 1)]
-
-    def _mask_outline(self, mask, w: int, h: int) -> list:
-        """Segmentation mask → simplified silhouette polygon ([y, x] 0-1000)."""
-        try:
-            np, cv2 = self._np, self._cv2
-            arr = mask.numpy_view() if hasattr(mask, "numpy_view") else np.asarray(mask)
-            if arr is None or arr.size == 0:
-                return []
-            binary = (arr > 0.5).astype(np.uint8) * 255
-            if binary.ndim == 3:
-                binary = binary[:, :, 0]
-            mh, mw = binary.shape[:2]
-            binary = cv2.morphologyEx(
-                binary, cv2.MORPH_CLOSE, np.ones((5, 5), np.uint8)
-            )
-            cnts, _ = cv2.findContours(
-                binary, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
-            )
-            if not cnts:
-                return []
-            c = max(cnts, key=cv2.contourArea)
-            if cv2.contourArea(c) < (mw * mh) * 0.01:
-                return []
-            peri = cv2.arcLength(c, True)
-            approx = cv2.approxPolyDP(c, 0.006 * peri, True)
-            pts = approx.reshape(-1, 2)
-            if len(pts) < 5:
-                return []
-            # keep the polygon light: at most 36 points
-            if len(pts) > 36:
-                step = len(pts) / 36.0
-                pts = [pts[int(i * step)] for i in range(36)]
-            return [[round(float(p[1]) / mh * 1000, 1),
-                     round(float(p[0]) / mw * 1000, 1)] for p in pts]
-        except Exception:
-            return []
-
-    @staticmethod
-    def _pose_outline(pose: dict) -> list:
-        """Rough body-hull polygon built from joints when no mask is available."""
-        need = ("head", "l_shoulder", "r_shoulder", "l_hip", "r_hip")
-        if not all(k in pose for k in need):
-            return []
-
-        def g(k, dy=0.0, dx=0.0):
-            p = pose.get(k)
-            return None if p is None else [p[0] + dy, p[1] + dx]
-
-        span = abs(pose["l_shoulder"][1] - pose["r_shoulder"][1]) or 60.0
-        pad = span * 0.30
-        chain = [
-            g("head", -pad * 1.1),
-            g("r_shoulder", -pad * 0.3, pad * 0.6),
-            g("r_elbow", 0, pad * 0.6) or g("r_shoulder", 0, pad),
-            g("r_wrist", 0, pad * 0.5) or g("r_elbow", 0, pad),
-            g("r_hip", 0, pad * 0.5),
-            g("r_knee", 0, pad * 0.45) or g("r_hip", pad, pad * 0.4),
-            g("r_ankle", pad * 0.4, pad * 0.4) or g("r_knee", pad, 0),
-            g("l_ankle", pad * 0.4, -pad * 0.4) or g("l_knee", pad, 0),
-            g("l_knee", 0, -pad * 0.45) or g("l_hip", pad, -pad * 0.4),
-            g("l_hip", 0, -pad * 0.5),
-            g("l_wrist", 0, -pad * 0.5) or g("l_elbow", 0, -pad),
-            g("l_elbow", 0, -pad * 0.6) or g("l_shoulder", 0, -pad),
-            g("l_shoulder", -pad * 0.3, -pad * 0.6),
-        ]
-        pts = [[max(0.0, min(1000.0, p[0])), max(0.0, min(1000.0, p[1]))]
-               for p in chain if p]
-        return pts if len(pts) >= 6 else []
-
-    # ── temporal smoothing (kills jitter without adding lag) ────────────
-    def _smooth_person(self, key: str, pose: dict, outline: list, box: list):
-        a = 0.55                                  # weight of the new frame
-        prev = self._smooth.get(key)
-        if prev:
-            pp, pb = prev.get("pose", {}), prev.get("box")
-            pose = {
-                k: ([v[0] * a + pp[k][0] * (1 - a), v[1] * a + pp[k][1] * (1 - a)]
-                    if k in pp else v)
-                for k, v in pose.items()
-            }
-            if pb and len(pb) == 4:
-                box = [v * a + pb[i] * (1 - a) for i, v in enumerate(box)]
-            po = prev.get("outline")
-            if po and len(po) == len(outline):
-                outline = [[p[0] * a + po[i][0] * (1 - a),
-                            p[1] * a + po[i][1] * (1 - a)]
-                           for i, p in enumerate(outline)]
-        self._smooth[key] = {"pose": pose, "outline": outline, "box": box}
-        rnd = lambda p: [round(p[0], 1), round(p[1], 1)]        # noqa: E731
-        return ({k: rnd(v) for k, v in pose.items()},
-                [rnd(p) for p in outline],
-                [round(v, 1) for v in box])
 
     # ── OpenCV HOG fallback ─────────────────────────────────────────────
     def _track_hog(self, bgr) -> list:

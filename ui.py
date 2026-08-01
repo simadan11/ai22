@@ -2473,8 +2473,12 @@ class MainWindow(QMainWindow):
     def _on_pcam_dets(self, dets) -> None:
         if self._feed_mode != "phonecam":
             return
-        self._pcam_dets = dets or []
-        self._repaint_pcam()
+        # keep only well-formed entries — the HUD assumes dicts downstream
+        self._pcam_dets = [d for d in (dets or []) if isinstance(d, dict)]
+        try:
+            self._repaint_pcam()
+        except Exception as e:
+            print(f"[HUD] pcam repaint failed: {e}")
 
     def _repaint_pcam(self) -> None:
         if self._pcam_px is None:
@@ -2504,7 +2508,8 @@ class MainWindow(QMainWindow):
         self._hud_cam_stack.setCurrentIndex(1)
 
         self._scan_px   = px
-        self._scan_dets = detections or []
+        self._scan_dets = [d for d in (detections or [])
+                           if isinstance(d, dict)]
         self._repaint_scan()
         self._sync_fx_timer()
         QTimer.singleShot(20000, self._leave_scan)
@@ -2527,7 +2532,8 @@ class MainWindow(QMainWindow):
     # --- EDITH person-effect animation --------------------------------------
     def _has_person(self) -> bool:
         dets = (self._scan_dets if self._feed_mode == "scan" else self._pcam_dets)
-        return any((d or {}).get("kind") == "person" for d in (dets or []))
+        return any(isinstance(d, dict) and d.get("kind") == "person"
+                   for d in (dets or []))
 
     def _sync_fx_timer(self) -> None:
         """Run a ~20 fps repaint loop while a human target is highlighted so the

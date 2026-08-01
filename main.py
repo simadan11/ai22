@@ -1803,7 +1803,15 @@ def main():
             print("\n🔴 Shutting down...")
 
     threading.Thread(target=runner, daemon=True).start()
-    ui.root.mainloop()
+    try:
+        ui.root.mainloop()
+    finally:
+        # make sure the isolated pose worker never outlives the UI
+        try:
+            from actions.pose_tracker import get_tracker
+            get_tracker().shutdown()
+        except Exception:
+            pass
 
 if __name__ == "__main__":
     main()
