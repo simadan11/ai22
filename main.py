@@ -59,6 +59,7 @@ from actions.background_monitor import (
 )
 from actions.web_search        import _news as _fetch_news_sync
 from memory.config_manager     import get_brief_enabled
+from core.model_router         import print_model_status, is_local_mode
 
 
 def get_base_dir():
@@ -1902,11 +1903,10 @@ def main():
     def runner():
         ui.wait_for_api_key()
 
-        # Показываем статус локального Claude сразу после загрузки конфига
-        local = _get_local_claude_config()
-        if local:
-            ui.write_log("🧠 ЛОКАЛЬНЫЙ CLAUDE АКТИВЕН")
-            ui.write_log(f"   → {local['model']} @ {local['base_url']}")
+        # Показываем текущую модель
+        print_model_status()
+        if is_local_mode():
+            ui.write_log("🧠 ЛОКАЛЬНАЯ МОДЕЛЬ БЕЗ ЦЕНЗУРЫ АКТИВНА")
 
         jarvis = JarvisLive(ui)
         try:
