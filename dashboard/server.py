@@ -24,6 +24,7 @@ try:
     from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Request
     from fastapi.responses import HTMLResponse, JSONResponse, FileResponse
     import uvicorn
+    import cryptography
     _DEPS_OK = True
 except ImportError:
     pass
@@ -64,6 +65,14 @@ def _get_gemini_key() -> str | None:
         import json as _json
         with open(BASE_DIR / "config" / "api_keys.json", "r", encoding="utf-8") as f:
             return _json.load(f).get("gemini_api_key")
+    except Exception:
+        return None
+
+def _get_dashboard_ip() -> str | None:
+    try:
+        import json as _json
+        with open(BASE_DIR / "config" / "api_keys.json", "r", encoding="utf-8") as f:
+            return _json.load(f).get("dashboard_ip")
     except Exception:
         return None
 
@@ -344,7 +353,7 @@ def _local_ip() -> str:
     # Method 2: hostname resolution (works offline on most systems)
     try:
         ip = socket.gethostbyname(socket.gethostname())
-        if not ip.startswith("127."):
+        if not ip.startswith("127.") and not ip.startswith("169.254."):
             return ip
     except Exception:
         pass
@@ -548,7 +557,8 @@ def _edith_detect(image_bytes: bytes) -> list[dict]:
 class DashboardServer:
 
     def __init__(self):
-        self._ip                          = _local_ip()
+        configured_ip = _get_dashboard_ip()
+        self._ip                          = configured_ip if configured_ip else _local_ip()
         self._tokens: set[str]            = set()
         self._token_keys: dict[str, str]  = {}   # auth_token → session_key
         self._aes_cache:  dict[str, bytes]= {}   # session_key → AES bytes

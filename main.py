@@ -1715,27 +1715,31 @@ class JarvisLive:
 
         # Start dashboard (optional — needs: pip install fastapi "uvicorn[standard]" cryptography)
         try:
-            from dashboard.server import DashboardServer
-            self._dashboard = DashboardServer()
-            self._dashboard.set_connect_callback(self._on_phone_connected)
-            asyncio.create_task(self._dashboard.serve())
-            # Wire the Remote overlay's device hub (list + kick + revoke)
-            def _kick_device(did: str) -> None:
-                if not self._dashboard:
-                    return
-                if did == "revoke":
-                    n = self._dashboard.revoke_all_paired()
-                    self.ui.write_log(f"SYS: {n} paired device(s) revoked.")
-                    return
-                if self._loop:
-                    asyncio.run_coroutine_threadsafe(
-                        self._dashboard.disconnect_device(did), self._loop
-                    )
-            self.ui.set_device_callbacks(self._dashboard.devices_info, _kick_device)
-            # Runs for the whole lifetime, not just inside an active session
-            asyncio.create_task(self._process_dashboard_commands())
-            asyncio.create_task(self._relay_phone_vision())
-            asyncio.create_task(self._relay_phone_cam())
+            from dashboard.server import DashboardServer, _DEPS_OK
+            if _DEPS_OK:
+                self._dashboard = DashboardServer()
+                self._dashboard.set_connect_callback(self._on_phone_connected)
+                asyncio.create_task(self._dashboard.serve())
+                # Wire the Remote overlay's device hub (list + kick + revoke)
+                def _kick_device(did: str) -> None:
+                    if not self._dashboard:
+                        return
+                    if did == "revoke":
+                        n = self._dashboard.revoke_all_paired()
+                        self.ui.write_log(f"SYS: {n} paired device(s) revoked.")
+                        return
+                    if self._loop:
+                        asyncio.run_coroutine_threadsafe(
+                            self._dashboard.disconnect_device(did), self._loop
+                        )
+                self.ui.set_device_callbacks(self._dashboard.devices_info, _kick_device)
+                # Runs for the whole lifetime, not just inside an active session
+                asyncio.create_task(self._process_dashboard_commands())
+                asyncio.create_task(self._relay_phone_vision())
+                asyncio.create_task(self._relay_phone_cam())
+            else:
+                self.ui.write_log("SYS: Remote Control unavailable (missing python dependencies).")
+                self._dashboard = None
         except Exception as e:
             print(f"[Dashboard] Disabled: {e}")
             self._dashboard = None
