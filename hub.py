@@ -12,7 +12,12 @@ from PyQt6.QtWidgets import (
     QLabel, QPushButton, QLineEdit, QComboBox, QTextEdit, QSplitter,
     QFrame, QSizePolicy
 )
-from PyQt6.QtWebEngineWidgets import QWebEngineView
+try:
+    from PyQt6.QtWebEngineWidgets import QWebEngineView
+    WEBENGINE_AVAILABLE = True
+except ImportError:
+    WEBENGINE_AVAILABLE = False
+    QWebEngineView = None
 from PyQt6.QtGui import QFont, QIcon
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -48,8 +53,13 @@ class OSINTHub(QMainWindow):
         right_split = QSplitter(Qt.Orientation.Vertical)
 
         # Карта
-        self.map_view = QWebEngineView()
-        self.map_view.setUrl(QUrl("https://www.openstreetmap.org"))
+        if WEBENGINE_AVAILABLE:
+            self.map_view = QWebEngineView()
+            self.map_view.setUrl(QUrl("https://www.openstreetmap.org"))
+        else:
+            self.map_view = QLabel("⚠️ PyQt6-WebEngine не установлен\n\npip install PyQt6-WebEngine")
+            self.map_view.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            self.map_view.setStyleSheet("color: #ff6b6b; font-size: 14px;")
         right_split.addWidget(self.map_view)
 
         # Панель спутниковых снимков
@@ -158,8 +168,13 @@ class OSINTHub(QMainWindow):
         header.setFont(QFont("Courier New", 11, QFont.Weight.Bold))
         lay.addWidget(header)
 
-        self.sat_view = QWebEngineView()
-        self.sat_view.setHtml(self._satellite_html())
+        if WEBENGINE_AVAILABLE:
+            self.sat_view = QWebEngineView()
+            self.sat_view.setHtml(self._satellite_html())
+        else:
+            self.sat_view = QLabel("⚠️ PyQt6-WebEngine не установлен\n\npip install PyQt6-WebEngine")
+            self.sat_view.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            self.sat_view.setStyleSheet("color: #ff6b6b; font-size: 14px;")
         lay.addWidget(self.sat_view, 1)
 
         info = QLabel("Sentinel-2 • Landsat-8 • Copernicus • Свежие снимки")

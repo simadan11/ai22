@@ -4116,6 +4116,14 @@ class MainWindow(QMainWindow):
             self._log.append_log("SYS: OSINT Hub открыт (отдельное окно)")
         except Exception as e:
             self._log.append_log(f"ERR: Не удалось открыть Hub: {e}")
+            # Показываем инструкцию
+            from PyQt6.QtWidgets import QMessageBox
+            QMessageBox.information(
+                self,
+                "OSINT Hub",
+                "Чтобы открыть Hub, нужно установить:\n\npip install PyQt6-WebEngine\n\n"
+                "Затем перезапустите приложение."
+            )
 
     # ── Customization ────────────────────────────────────────────────────────────
 
