@@ -3561,6 +3561,21 @@ class MainWindow(QMainWindow):
         lay.addWidget(self._europe_ai_btn)
         self._update_europe_ai_btn(_read_full_config().get("europe_satellite_ai", False))
 
+        # ── Открыть OSINT Hub ───────────────────────────────────────────────
+        hub_btn = QPushButton("🛰️  OPEN OSINT HUB")
+        hub_btn.setFixedHeight(28)
+        hub_btn.setFont(QFont("Courier New", 7, QFont.Weight.Bold))
+        hub_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        hub_btn.setStyleSheet(f"""
+            QPushButton {{
+                background: #001a2e; color: {C.PRI};
+                border: 1px solid {C.PRI}; border-radius: 4px;
+            }}
+            QPushButton:hover {{ background: #002a4a; }}
+        """)
+        hub_btn.clicked.connect(self._open_osint_hub)
+        lay.addWidget(hub_btn)
+
         # ── system monitor (was the left panel) ───────────────────────────
         lay.addSpacing(4)
         self._left_panel.setMinimumWidth(0)
@@ -4090,6 +4105,17 @@ class MainWindow(QMainWindow):
                 }}
                 QPushButton:hover {{ color: {C.TEXT}; border: 1px solid {C.BORDER_B}; }}
             """)
+
+    def _open_osint_hub(self):
+        """Открывает отдельное окно OSINT Hub с картой и спутниковыми снимками"""
+        try:
+            import subprocess
+            import sys
+            hub_path = str(Path(__file__).parent / "hub.py")
+            subprocess.Popen([sys.executable, hub_path])
+            self._log.append_log("SYS: OSINT Hub открыт (отдельное окно)")
+        except Exception as e:
+            self._log.append_log(f"ERR: Не удалось открыть Hub: {e}")
 
     # ── Customization ────────────────────────────────────────────────────────────
 
