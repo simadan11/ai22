@@ -1589,7 +1589,7 @@ class JarvisLive:
         people = [d for d in people if d.get("kind") != "face"]
         faces = []
         try:
-            from actions.face_id import detect_faces, identify_box
+            from actions.face_id import detect_faces, identify_box, save_new_faces
             if mesh_faces:
                 faces = mesh_faces
                 # attach identities to the meshes we already have
@@ -1602,6 +1602,15 @@ class JarvisLive:
             pass
         except BaseException as e:
             print(f"[Dashboard] Face detection failed: {e}")
+
+        # Keep a single snapshot for each new face appearance.  This runs
+        # after detection (including mesh detections) and is deduplicated by
+        # actions.face_id against the captures already on disk.
+        if faces:
+            try:
+                await asyncio.to_thread(save_new_faces, frame, faces)
+            except BaseException as e:
+                print(f"[Dashboard] Automatic face capture failed: {e}")
         if not self._dashboard._cam_stream_active:
             return
         # Reuse the newest Gemini label for a person, if we have one, so the
