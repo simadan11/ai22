@@ -1856,27 +1856,21 @@ class JarvisLive:
                 else:
                     self._conn_backoff = 3
 
-            elif name == \"social_osint\":
+            if name == "social_osint":
                 r = await loop.run_in_executor(None, lambda: social_osint(parameters=args, player=self.ui))
-                result = r or \"OSINT search complete.\"
-
+                result = r or "OSINT search complete."
             else:
-                result = f\"Unknown tool: {name}\"
-            finally:
-                self.session = None
-                # Only save if there was a real conversation (≥3 turns)
-                if len(self._session_log) >= 3:
-                    asyncio.create_task(self._save_session_summary())
+                result = f"Unknown tool: {name}"
 
-            self.set_speaking(False)
-            self.ui.set_state("SLEEPING")
+        self.set_speaking(False)
+        self.ui.set_state("SLEEPING")
 
-            if self._dashboard:
-                await self._dashboard.broadcast({"type": "status", "state": "sleeping"})
+        if self._dashboard:
+            await self._dashboard.broadcast({"type": "status", "state": "sleeping"})
 
-            delay = getattr(self, "_conn_backoff", 3)
-            print(f"[JARVIS] Reconnecting in {delay}s...")
-            await asyncio.sleep(delay)
+        delay = getattr(self, "_conn_backoff", 3)
+        print(f"[JARVIS] Reconnecting in {delay}s...")
+        await asyncio.sleep(delay)
 
 def _install_crash_guard() -> None:
     """Keep the window alive if a stray exception escapes a Qt slot or thread.
