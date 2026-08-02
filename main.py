@@ -1913,9 +1913,13 @@ def main():
         if is_osint_mode():
             ui.write_log("🕵️ OSINT MODE АКТИВЕН — максимальная свобода")
 
-        cfg = _read_full_config()
-        if cfg.get("europe_satellite_ai"):
-            ui.write_log("🛰️ EUROPE SATELLITE + AI ENHANCE АКТИВЕН")
+        try:
+            with open(API_CONFIG_PATH, "r", encoding="utf-8") as f:
+                cfg = json.load(f)
+            if cfg.get("europe_satellite_ai"):
+                ui.write_log("🛰️ EUROPE SATELLITE + AI ENHANCE АКТИВЕН")
+        except Exception:
+            pass
 
         jarvis = JarvisLive(ui)
         try:
