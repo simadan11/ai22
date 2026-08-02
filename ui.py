@@ -3534,6 +3534,15 @@ class MainWindow(QMainWindow):
         self._brief_btn.clicked.connect(self._toggle_brief)
         lay.addWidget(self._brief_btn)
 
+        # ── Local Claude toggle ─────────────────────────────────────────────
+        self._local_claude_btn = QPushButton()
+        self._local_claude_btn.setFixedHeight(28)
+        self._local_claude_btn.setFont(QFont("Courier New", 7))
+        self._local_claude_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._local_claude_btn.clicked.connect(self._toggle_local_claude)
+        lay.addWidget(self._local_claude_btn)
+        self._update_local_claude_btn(_read_full_config().get("use_local_claude", False))
+
         # ── system monitor (was the left panel) ───────────────────────────
         lay.addSpacing(4)
         self._left_panel.setMinimumWidth(0)
@@ -3947,6 +3956,43 @@ class MainWindow(QMainWindow):
             self._brief_btn.setStyleSheet(f"""
                 QPushButton {{
                     background: transparent; color: {C.TEXT_DIM};
+                    border: 1px solid {C.BORDER}; border-radius: 3px;
+                    text-align: left; padding: 0 8px;
+                }}
+                QPushButton:hover {{ color: {C.TEXT}; border: 1px solid {C.BORDER_B}; }}
+            """)
+
+    # ── Local Claude (Ollama / LM Studio) toggle ─────────────────────────────
+    def _toggle_local_claude(self):
+        cfg = _read_full_config()
+        new_val = not cfg.get("use_local_claude", False)
+        cfg["use_local_claude"] = new_val
+        try:
+            API_FILE.write_text(json.dumps(cfg, indent=4), encoding="utf-8")
+        except Exception:
+            pass
+        self._update_local_claude_btn(new_val)
+        status = "ON (локальный Claude)" if new_val else "OFF (Gemini)"
+        self._log.append_log(f"SYS: Локальный Claude — {status}")
+
+    def _update_local_claude_btn(self, enabled: bool):
+        if not hasattr(self, '_local_claude_btn'):
+            return
+        if enabled:
+            self._local_claude_btn.setText("🧠  LOCAL CLAUDE: ON")
+            self._local_claude_btn.setStyleSheet(f"""
+                QPushButton {{
+                    background: #001a08; color: {C.GREEN};
+                    border: 1px solid {C.GREEN_D}; border-radius: 3px;
+                    text-align: left; padding: 0 8px;
+                }}
+                QPushButton:hover {{ background: #002010; }}
+            """)
+        else:
+            self._local_claude_btn.setText("🧠  LOCAL CLAUDE: OFF")
+            self._local_claude_btn.setStyleSheet(f"""
+                QPushButton {{
+                    background: {C.PANEL2}; color: {C.TEXT_DIM};
                     border: 1px solid {C.BORDER}; border-radius: 3px;
                     text-align: left; padding: 0 8px;
                 }}

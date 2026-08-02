@@ -28,6 +28,7 @@ from pathlib import Path
 import sounddevice as sd
 from google import genai
 from google.genai import types
+from openai import OpenAI as _OpenAIClient   # для локального Claude / Ollama
 from ui import JarvisUI
 from memory.memory_manager import (
     load_memory, update_memory, format_memory_for_prompt,
@@ -77,7 +78,23 @@ CHUNK_SIZE          = 1024
 
 def _get_api_key() -> str:
     with open(API_CONFIG_PATH, "r", encoding="utf-8") as f:
-        return json.load(f)["gemini_api_key"]
+        cfg = json.load(f)
+        return cfg.get("gemini_api_key", "")
+
+def _get_local_claude_config() -> dict:
+    """Возвращает конфиг локального Claude, если включён."""
+    try:
+        with open(API_CONFIG_PATH, "r", encoding="utf-8") as f:
+            cfg = json.load(f)
+        if cfg.get("use_local_claude"):
+            return {
+                "base_url": cfg.get("local_claude_base_url", "http://localhost:11434/v1"),
+                "api_key": cfg.get("local_claude_api_key", "ollama"),
+                "model": cfg.get("local_claude_model", "claude-3-sonnet")
+            }
+    except Exception:
+        pass
+    return {}
 
 
 def _load_system_prompt() -> str:
@@ -1884,6 +1901,13 @@ def main():
 
     def runner():
         ui.wait_for_api_key()
+
+        # Показываем статус локального Claude сразу после загрузки конфига
+        local = _get_local_claude_config()
+        if local:
+            ui.write_log("🧠 ЛОКАЛЬНЫЙ CLAUDE АКТИВЕН")
+            ui.write_log(f"   → {local['model']} @ {local['base_url']}")
+
         jarvis = JarvisLive(ui)
         try:
             asyncio.run(jarvis.run())

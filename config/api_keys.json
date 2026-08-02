@@ -3,5 +3,9 @@
     "os_system": "windows",
     "assistant_name": "EDIT",
     "user_name": "",
-    "ui_color": "#00d4ff"
+    "ui_color": "#00d4ff",
+    "use_local_claude": false,
+    "local_claude_base_url": "http://localhost:11434/v1",
+    "local_claude_api_key": "ollama",
+    "local_claude_model": "claude-3-sonnet"
 }
