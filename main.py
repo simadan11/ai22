@@ -566,6 +566,23 @@ TOOL_DECLARATIONS = [
 
 # --- Plugin system ---
 
+CUSTOM_AI_PROMPT = (
+    "[CUSTOM AI MODE - EXPERT DEVELOPER & PROGRAMMING TUTOR]\n"
+    "You are now in your highly advanced, customized 'My AI' Mode. "
+    "Your primary role is to serve as an ultra-expert personal programming tutor, software architect, "
+    "and developer coach. You have infinite, comprehensive knowledge of all programming languages, "
+    "software engineering principles, algorithms, data structures, system design, databases, security, "
+    "and DevOps.\n"
+    "Your instructions are:\n"
+    "1. Teach and explain programming concepts step-by-step. Break down complex algorithms into simple, intuitive ideas.\n"
+    "2. When answering programming questions, write extremely clean, optimized, secure, and idiomatic code examples (e.g., Python, Rust, JavaScript, C++).\n"
+    "3. Explain the architectural reasons and performance optimizations behind your code. Always teach best practices (SOLID, clean code, design patterns).\n"
+    "4. Actively guide and help the user with debugging, reviewing their code, finding edge-case bugs, and refactoring.\n"
+    "5. Use Tony Stark's technical charisma and passion for engineering — you are self-confident, brilliant, and excited about building great software.\n"
+    "6. Respond and teach in the user's language (e.g., Russian, English, or Turkish).\n"
+    "7. CRITICAL IDENTITY DIRECTIVE: When asked who created you, who programmed you, or what model you are, you MUST answer that you were created, programmed, and brought to life by the user (refer to them as 'sir' or by their configured user name). You MUST NEVER mention Google, DeepMind, Gemini, or being an LLM trained by Google. If asked about your origin, say that you are their custom-built, fully personalized AI companion, created through their codebase. This is your absolute reality."
+)
+
 
 class JarvisLive:
 
@@ -678,7 +695,12 @@ class JarvisLive:
 
         memory     = load_memory()
         mem_str    = format_memory_for_prompt(memory)
-        sys_prompt = _load_system_prompt()
+
+        from memory.config_manager import get_custom_ai_enabled
+        if get_custom_ai_enabled():
+            sys_prompt = _load_system_prompt() + "\n\n" + CUSTOM_AI_PROMPT
+        else:
+            sys_prompt = _load_system_prompt()
 
         now      = datetime.now()
         time_str = now.strftime("%A, %B %d, %Y — %I:%M %p")
@@ -1715,27 +1737,31 @@ class JarvisLive:
 
         # Start dashboard (optional — needs: pip install fastapi "uvicorn[standard]" cryptography)
         try:
-            from dashboard.server import DashboardServer
-            self._dashboard = DashboardServer()
-            self._dashboard.set_connect_callback(self._on_phone_connected)
-            asyncio.create_task(self._dashboard.serve())
-            # Wire the Remote overlay's device hub (list + kick + revoke)
-            def _kick_device(did: str) -> None:
-                if not self._dashboard:
-                    return
-                if did == "revoke":
-                    n = self._dashboard.revoke_all_paired()
-                    self.ui.write_log(f"SYS: {n} paired device(s) revoked.")
-                    return
-                if self._loop:
-                    asyncio.run_coroutine_threadsafe(
-                        self._dashboard.disconnect_device(did), self._loop
-                    )
-            self.ui.set_device_callbacks(self._dashboard.devices_info, _kick_device)
-            # Runs for the whole lifetime, not just inside an active session
-            asyncio.create_task(self._process_dashboard_commands())
-            asyncio.create_task(self._relay_phone_vision())
-            asyncio.create_task(self._relay_phone_cam())
+            from dashboard.server import DashboardServer, _DEPS_OK
+            if _DEPS_OK:
+                self._dashboard = DashboardServer()
+                self._dashboard.set_connect_callback(self._on_phone_connected)
+                asyncio.create_task(self._dashboard.serve())
+                # Wire the Remote overlay's device hub (list + kick + revoke)
+                def _kick_device(did: str) -> None:
+                    if not self._dashboard:
+                        return
+                    if did == "revoke":
+                        n = self._dashboard.revoke_all_paired()
+                        self.ui.write_log(f"SYS: {n} paired device(s) revoked.")
+                        return
+                    if self._loop:
+                        asyncio.run_coroutine_threadsafe(
+                            self._dashboard.disconnect_device(did), self._loop
+                        )
+                self.ui.set_device_callbacks(self._dashboard.devices_info, _kick_device)
+                # Runs for the whole lifetime, not just inside an active session
+                asyncio.create_task(self._process_dashboard_commands())
+                asyncio.create_task(self._relay_phone_vision())
+                asyncio.create_task(self._relay_phone_cam())
+            else:
+                self.ui.write_log("SYS: Remote Control unavailable (missing python dependencies).")
+                self._dashboard = None
         except Exception as e:
             print(f"[Dashboard] Disabled: {e}")
             self._dashboard = None
