@@ -3552,6 +3552,15 @@ class MainWindow(QMainWindow):
         lay.addWidget(self._osint_btn)
         self._update_osint_btn(_read_full_config().get("osint_mode", False))
 
+        # ── Europe Satellite + AI Enhance toggle ────────────────────────────
+        self._europe_ai_btn = QPushButton()
+        self._europe_ai_btn.setFixedHeight(28)
+        self._europe_ai_btn.setFont(QFont("Courier New", 7))
+        self._europe_ai_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._europe_ai_btn.clicked.connect(self._toggle_europe_ai)
+        lay.addWidget(self._europe_ai_btn)
+        self._update_europe_ai_btn(_read_full_config().get("europe_satellite_ai", False))
+
         # ── system monitor (was the left panel) ───────────────────────────
         lay.addSpacing(4)
         self._left_panel.setMinimumWidth(0)
@@ -4037,6 +4046,43 @@ class MainWindow(QMainWindow):
         else:
             self._osint_btn.setText("🕵️  OSINT MODE: OFF")
             self._osint_btn.setStyleSheet(f"""
+                QPushButton {{
+                    background: {C.PANEL2}; color: {C.TEXT_DIM};
+                    border: 1px solid {C.BORDER}; border-radius: 3px;
+                    text-align: left; padding: 0 8px;
+                }}
+                QPushButton:hover {{ color: {C.TEXT}; border: 1px solid {C.BORDER_B}; }}
+            """)
+
+    # ── Europe Satellite + AI Enhance ─────────────────────────────────────
+    def _toggle_europe_ai(self):
+        cfg = _read_full_config()
+        new_val = not cfg.get("europe_satellite_ai", False)
+        cfg["europe_satellite_ai"] = new_val
+        try:
+            API_FILE.write_text(json.dumps(cfg, indent=4), encoding="utf-8")
+        except Exception:
+            pass
+        self._update_europe_ai_btn(new_val)
+        status = "ON (Европа + AI Enhance)" if new_val else "OFF"
+        self._log.append_log(f"SYS: Europe Satellite + AI — {status}")
+
+    def _update_europe_ai_btn(self, enabled: bool):
+        if not hasattr(self, '_europe_ai_btn'):
+            return
+        if enabled:
+            self._europe_ai_btn.setText("🛰️  EUROPE SAT + AI: ON")
+            self._europe_ai_btn.setStyleSheet(f"""
+                QPushButton {{
+                    background: #001a2e; color: {C.PRI};
+                    border: 1px solid {C.PRI}; border-radius: 3px;
+                    text-align: left; padding: 0 8px;
+                }}
+                QPushButton:hover {{ background: #002a4a; }}
+            """)
+        else:
+            self._europe_ai_btn.setText("🛰️  EUROPE SAT + AI: OFF")
+            self._europe_ai_btn.setStyleSheet(f"""
                 QPushButton {{
                     background: {C.PANEL2}; color: {C.TEXT_DIM};
                     border: 1px solid {C.BORDER}; border-radius: 3px;

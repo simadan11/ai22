@@ -1919,6 +1919,10 @@ def main():
         if is_osint_mode():
             ui.write_log("🕵️ OSINT MODE АКТИВЕН — максимальная свобода")
 
+        cfg = _read_full_config()
+        if cfg.get("europe_satellite_ai"):
+            ui.write_log("🛰️ EUROPE SATELLITE + AI ENHANCE АКТИВЕН")
+
         jarvis = JarvisLive(ui)
         try:
             asyncio.run(jarvis.run())
