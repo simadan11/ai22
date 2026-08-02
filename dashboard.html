@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Дашборд | Командный центр</title>
+    <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+
+    <div class="container" style="max-width: 800px;">
+        <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid var(--border); padding-bottom: 15px; margin-bottom: 20px;">
+            <h2 style="margin: 0;">Командный центр</h2>
+            <button class="btn btn-danger" onclick="logout()">Выход</button>
+        </div>
+
+        <p>Вы вошли как: <strong id="current-user-name" style="color: #fff;"></strong></p>
+
+        <div id="admin-panel-link" style="display: none; margin-bottom: 20px;">
+            <a href="admin.html" class="btn" style="background: #d29922; color: #000; font-weight: bold;">⚙️ Панель Администратора</a>
+        </div>
+
+        <h3>Активность пользователей:</h3>
+        <ul class="user-list" id="users-list">
+            <!-- Сюда JS загрузит пользователей -->
+        </ul>
+    </div>
+
+    <script src="js/db.js"></script>
+    <script>
+        const currentUser = getCurrentUser();
+        if (!currentUser) {
+            window.location.href = 'index.html';
+        } else {
+            document.getElementById('current-user-name').innerText = currentUser;
+            const db = getDB();
+            const me = db.users.find(u => u.username === currentUser);
+            
+            if (!me) {
+                // Если админ нас удалил
+                logout();
+            } else if (me.isAdmin) {
+                document.getElementById('admin-panel-link').style.display = 'block';
+            }
+
+            renderUsers();
+            
+            // Пингуем нашу активность и обновляем список каждые 2 секунды
+            setInterval(() => {
+                pingActivity();
+                renderUsers();
+            }, 2000);
+        }
+
+        function renderUsers() {
+            const db = getDB();
+            const list = document.getElementById('users-list');
+            list.innerHTML = "";
+
+            const approvedUsers = db.users.filter(u => u.isApproved || u.isAdmin);
+            const now = Date.now();
+
+            approvedUsers.forEach(u => {
+                const li = document.createElement('li');
+                
+                // Пользователь считается онлайн, если пинговал сервер в последние 10 секунд
+                const isOnline = (now - u.lastActive) < 10000;
+                
+                let nameHtml = `<span>${u.username}`;
+                if (u.isAdmin) nameHtml += `<span class="badge admin">Админ</span>`;
+                nameHtml += `</span>`;
+
+                let statusHtml = isOnline 
+                    ? `<span class="badge online">В сети</span>` 
+                    : `<span class="badge offline">Не в сети</span>`;
+
+                li.innerHTML = nameHtml + statusHtml;
+                list.appendChild(li);
+            });
+        }
+    </script>
+</body>
+</html>

@@ -1,0 +1,116 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Администратор | Командный центр</title>
+    <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+
+    <!-- Форма входа для админа -->
+    <div class="container text-center" id="admin-login-ui">
+        <h2>Вход Администратора</h2>
+        <input type="password" id="admin-pwd" class="input-text" placeholder="Введите пароль">
+        <p class="text-muted" style="font-size: 13px;">(Пароль по умолчанию: admin)</p>
+        <button class="btn btn-block" onclick="loginAdmin()">Войти</button>
+        <a href="index.html" class="btn btn-block btn-secondary mt-4">На главную</a>
+    </div>
+
+    <!-- Панель управления -->
+    <div class="container" id="admin-panel-ui" style="display: none; max-width: 800px;">
+        <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid var(--border); padding-bottom: 15px; margin-bottom: 20px;">
+            <h2 style="margin: 0;">Управление доступом</h2>
+            <div>
+                <a href="dashboard.html" class="btn">В Командный центр</a>
+                <button class="btn btn-danger" onclick="logout()">Выход</button>
+            </div>
+        </div>
+
+        <h3>Заявки на вход:</h3>
+        <p class="text-muted" id="no-pending-msg">Нет новых заявок.</p>
+        <div id="pending-list" style="display: flex; flex-wrap: wrap; gap: 20px;"></div>
+    </div>
+
+    <script src="js/db.js"></script>
+    <script>
+        function checkAdmin() {
+            const currentUser = getCurrentUser();
+            if (currentUser) {
+                const db = getDB();
+                const user = db.users.find(u => u.username === currentUser);
+                if (user && user.isAdmin) {
+                    showPanel();
+                    return;
+                }
+            }
+            // Иначе показываем форму входа
+            document.getElementById('admin-login-ui').style.display = 'block';
+            document.getElementById('admin-panel-ui').style.display = 'none';
+        }
+
+        function loginAdmin() {
+            const pwd = document.getElementById('admin-pwd').value;
+            if (pwd === 'admin') {
+                setCurrentUser('admin');
+                showPanel();
+            } else {
+                alert('Неверный пароль!');
+            }
+        }
+
+        function showPanel() {
+            document.getElementById('admin-login-ui').style.display = 'none';
+            document.getElementById('admin-panel-ui').style.display = 'block';
+            renderPending();
+        }
+
+        function renderPending() {
+            const db = getDB();
+            const list = document.getElementById('pending-list');
+            list.innerHTML = "";
+            
+            const pending = db.users.filter(u => !u.isApproved && !u.isAdmin);
+            
+            document.getElementById('no-pending-msg').style.display = pending.length === 0 ? 'block' : 'none';
+
+            pending.forEach(u => {
+                const card = document.createElement('div');
+                card.className = 'card';
+                card.style.flex = "1 1 calc(50% - 20px)";
+                card.innerHTML = `
+                    <h4 style="margin-top:0;">Логин: <span style="color: #2f81f7;">${u.username}</span></h4>
+                    <img src="${db.pendingPhotos[u.username] || ''}" alt="Фото пользователя">
+                    <div style="display: flex; gap: 10px; justify-content: center;">
+                        <button class="btn btn-success" onclick="approveUser('${u.username}')">Разрешить</button>
+                        <button class="btn btn-danger" onclick="rejectUser('${u.username}')">Отклонить</button>
+                    </div>
+                `;
+                list.appendChild(card);
+            });
+        }
+
+        function approveUser(username) {
+            let db = getDB();
+            let user = db.users.find(u => u.username === username);
+            if (user) {
+                user.isApproved = true;
+                delete db.pendingPhotos[username]; // Чистим фото, чтобы не засорять память
+                saveDB(db);
+                renderPending();
+            }
+        }
+
+        function rejectUser(username) {
+            let db = getDB();
+            db.users = db.users.filter(u => u.username !== username);
+            delete db.pendingPhotos[username];
+            saveDB(db);
+            renderPending();
+        }
+
+        // Запуск
+        checkAdmin();
+    </script>
+</body>
+</html>
