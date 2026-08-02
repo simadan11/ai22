@@ -29,11 +29,11 @@ def _is_osint_mode() -> bool:
 def social_osint(parameters: dict, player=None, speak=None) -> str:
     """
     parameters:
-        action     : search | deep | connections | recent (default: search)
-        query      : имя, username, телефон, email
-        platforms  : список платформ (vk, tg, instagram, facebook, x, linkedin, tiktok)
+        action     : search | deep | connections | recent | geolocate | reverse_image | ip_geo | exif (default: search)
+        query      : имя, username, телефон, email, координаты, IP, URL фото
+        platforms  : список платформ
         limit      : сколько результатов (default: 10)
-        deep       : делать ли глубокий поиск (true/false)
+        deep       : делать ли глубокий поиск
     """
     if not _is_osint_mode():
         return "OSINT Mode выключен. Включи 🕵️ OSINT MODE в настройках для использования этого инструмента."
@@ -45,11 +45,12 @@ def social_osint(parameters: dict, player=None, speak=None) -> str:
     limit = int(p.get("limit", 10))
     deep = bool(p.get("deep", False))
 
-    if not query:
-        return "Укажи query (имя, username, телефон или email)."
+    if not query and action not in ["ip_geo", "reverse_image"]:
+        return "Укажи query (имя, username, телефон, email, координаты, IP или URL фото)."
 
     results = []
 
+    # ── SOCIAL SEARCH ─────────────────────────────────────────────────────
     if action == "search":
         results = _basic_search(query, platforms, limit)
     elif action == "deep":
@@ -58,8 +59,21 @@ def social_osint(parameters: dict, player=None, speak=None) -> str:
         results = _find_connections(query, platforms)
     elif action == "recent":
         results = _recent_activity(query, platforms, limit)
+
+    # ── GEOINT ────────────────────────────────────────────────────────────
+    elif action == "geolocate":
+        results = _geolocate(query, limit)
+    elif action == "reverse_image":
+        image_url = p.get("query") or p.get("image_url", "")
+        results = _reverse_image_geolocate(image_url, limit)
+    elif action == "ip_geo":
+        results = _ip_geolocation(query, limit)
+    elif action == "exif":
+        image_url = p.get("query") or p.get("image_url", "")
+        results = _extract_exif_geodata(image_url)
+
     else:
-        return f"Неизвестное действие: {action}. Используй search, deep, connections, recent."
+        return f"Неизвестное действие: {action}. Доступно: search, deep, connections, recent, geolocate, reverse_image, ip_geo, exif."
 
     if not results:
         return f"Ничего не найдено по запросу «{query}»."
@@ -75,11 +89,109 @@ def social_osint(parameters: dict, player=None, speak=None) -> str:
             output += f"   🔗 {r['url']}\n"
         if r.get("snippet"):
             output += f"   {r['snippet'][:180]}...\n"
+        if r.get("coordinates"):
+            output += f"   📍 {r['coordinates']}\n"
+        if r.get("address"):
+            output += f"   🏠 {r['address']}\n"
 
     if player:
         player.show_content(f"OSINT — {query}", output)
 
     return output
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# GEOINT функции
+# ──────────────────────────────────────────────────────────────────────────────
+
+def _geolocate(query: str, limit: int) -> List[Dict]:
+    """Геолокация по имени/месту (город, координаты, адреса)."""
+    geo_queries = [
+        f'"{query}" (координаты OR latitude OR longitude OR GPS OR location)',
+        f'"{query}" (город OR address OR адрес OR карта)',
+        f'site:instagram.com "{query}" location',
+        f'site:vk.com "{query}" координаты'
+    ]
+
+    results = []
+    for q in geo_queries[:3]:
+        try:
+            res = _web_search({"query": q, "mode": "research"}, player=None)
+            if res and len(res) > 50:
+                results.append({
+                    "platform": "geolocate",
+                    "title": f"Геолокация: {query}",
+                    "snippet": res[:350],
+                    "url": ""
+                })
+        except Exception:
+            continue
+    return results
+
+
+def _reverse_image_geolocate(image_url: str, limit: int) -> List[Dict]:
+    """Reverse image search + геолокация по фото."""
+    if not image_url.startswith(("http://", "https://")):
+        return [{"platform": "reverse_image", "title": "Ошибка", "snippet": "Нужна прямая ссылка на изображение"}]
+
+    queries = [
+        f'"{image_url}" reverse image search',
+        f'site:google.com "{image_url}"',
+        f'"{image_url}" location OR GPS OR координаты'
+    ]
+
+    results = []
+    for q in queries:
+        try:
+            res = _web_search({"query": q, "mode": "research"}, player=None)
+            if res:
+                results.append({
+                    "platform": "reverse_image",
+                    "title": "Reverse Image + GEO",
+                    "snippet": res[:300],
+                    "url": image_url
+                })
+        except Exception:
+            continue
+    return results
+
+
+def _ip_geolocation(ip_or_domain: str, limit: int) -> List[Dict]:
+    """Геолокация по IP или домену."""
+    queries = [
+        f"{ip_or_domain} ip geolocation",
+        f"{ip_or_domain} whois location",
+        f"ipinfo.io {ip_or_domain}"
+    ]
+
+    results = []
+    for q in queries:
+        try:
+            res = _web_search({"query": q, "mode": "research"}, player=None)
+            if res:
+                results.append({
+                    "platform": "ip_geo",
+                    "title": f"IP GEO: {ip_or_domain}",
+                    "snippet": res[:300],
+                    "url": ""
+                })
+        except Exception:
+            continue
+    return results
+
+
+def _extract_exif_geodata(image_url: str) -> List[Dict]:
+    """Извлечение GPS из EXIF (симулируем через поиск)."""
+    if not image_url:
+        return [{"platform": "exif", "title": "Ошибка", "snippet": "Укажи URL изображения"}]
+
+    return [{
+        "platform": "exif",
+        "title": "EXIF + GPS Data",
+        "snippet": f"Анализ EXIF для {image_url}. Ищите GPSLatitude, GPSLongitude, DateTimeOriginal в метаданных.",
+        "url": image_url,
+        "note": "Для реального извлечения используй exiftool или Pillow"
+    }]
 
 
 def _basic_search(query: str, platforms: List[str], limit: int) -> List[Dict]:
