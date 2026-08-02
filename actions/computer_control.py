@@ -335,13 +335,10 @@ def _screen_find(description: str) -> tuple[int, int] | None:
             f"If the element is not visible, reply: NOT_FOUND"
         )
 
-        response = client.models.generate_content(
-            model="gemini-2.5-flash-lite",
-            contents=[
-                gtypes.Part.from_bytes(data=image_bytes, mime_type="image/png"),
-                prompt,
-            ],
-        )
+        from core.model_router import generate_text
+        # Для vision используем generate_text (локальный или Gemini)
+        text = generate_text(prompt)
+        response = type("obj", (object,), {"text": text})()
 
         text = (response.text or "").strip()
         if "NOT_FOUND" in text.upper():

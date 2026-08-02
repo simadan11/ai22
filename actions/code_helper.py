@@ -24,12 +24,17 @@ def _get_api_key() -> str:
 
 
 def _get_gemini(model: str = GEMINI_MODEL):
-    from google import genai
-    _c = genai.Client(api_key=_get_api_key())
+    from core.model_router import generate_text, chat_completion, is_local_mode
 
     class _W:
         def generate_content(self, contents):
-            return _c.models.generate_content(model=model, contents=contents)
+            if isinstance(contents, str):
+                text = generate_text(contents, model=model)
+                return type("obj", (object,), {"text": text})()
+            else:
+                msgs = [{"role": "user", "content": str(contents)}]
+                text = chat_completion(msgs, model=model)
+                return type("obj", (object,), {"text": text})()
 
     return _W()
 

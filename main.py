@@ -28,6 +28,7 @@ from pathlib import Path
 import sounddevice as sd
 from google import genai
 from google.genai import types
+from openai import OpenAI as _OpenAIClient   # для локального Claude / Ollama
 from ui import JarvisUI
 from memory.memory_manager import (
     load_memory, update_memory, format_memory_for_prompt,
@@ -53,11 +54,13 @@ from actions.computer_control  import computer_control
 from actions.game_updater      import game_updater
 from actions.system_monitor    import SystemMonitor, get_system_status
 from actions.proactive         import ProactiveEngine
+from actions.social_osint      import social_osint
 from actions.background_monitor import (
     add_monitor, remove_monitor, list_monitors, check_all as monitor_check_all,
 )
 from actions.web_search        import _news as _fetch_news_sync
 from memory.config_manager     import get_brief_enabled
+from core.model_router         import print_model_status, is_local_mode
 
 
 def get_base_dir():
@@ -77,7 +80,23 @@ CHUNK_SIZE          = 1024
 
 def _get_api_key() -> str:
     with open(API_CONFIG_PATH, "r", encoding="utf-8") as f:
-        return json.load(f)["gemini_api_key"]
+        cfg = json.load(f)
+        return cfg.get("gemini_api_key", "")
+
+def _get_local_claude_config() -> dict:
+    """Возвращает конфиг локального Claude, если включён."""
+    try:
+        with open(API_CONFIG_PATH, "r", encoding="utf-8") as f:
+            cfg = json.load(f)
+        if cfg.get("use_local_claude"):
+            return {
+                "base_url": cfg.get("local_claude_base_url", "http://localhost:11434/v1"),
+                "api_key": cfg.get("local_claude_api_key", "ollama"),
+                "model": cfg.get("local_claude_model", "claude-3-sonnet")
+            }
+    except Exception:
+        pass
+    return {}
 
 
 def _load_system_prompt() -> str:
@@ -1836,21 +1855,22 @@ class JarvisLive:
                     )
                 else:
                     self._conn_backoff = 3
-            finally:
-                self.session = None
-                # Only save if there was a real conversation (≥3 turns)
-                if len(self._session_log) >= 3:
-                    asyncio.create_task(self._save_session_summary())
 
-            self.set_speaking(False)
-            self.ui.set_state("SLEEPING")
+            if name == "social_osint":
+                r = await loop.run_in_executor(None, lambda: social_osint(parameters=args, player=self.ui))
+                result = r or "OSINT search complete."
+            else:
+                result = f"Unknown tool: {name}"
 
-            if self._dashboard:
-                await self._dashboard.broadcast({"type": "status", "state": "sleeping"})
+        self.set_speaking(False)
+        self.ui.set_state("SLEEPING")
 
-            delay = getattr(self, "_conn_backoff", 3)
-            print(f"[JARVIS] Reconnecting in {delay}s...")
-            await asyncio.sleep(delay)
+        if self._dashboard:
+            await self._dashboard.broadcast({"type": "status", "state": "sleeping"})
+
+        delay = getattr(self, "_conn_backoff", 3)
+        print(f"[JARVIS] Reconnecting in {delay}s...")
+        await asyncio.sleep(delay)
 
 def _install_crash_guard() -> None:
     """Keep the window alive if a stray exception escapes a Qt slot or thread.
@@ -1884,6 +1904,23 @@ def main():
 
     def runner():
         ui.wait_for_api_key()
+
+        # Показываем текущую модель
+        print_model_status()
+        if is_local_mode():
+            ui.write_log("🧠 ЛОКАЛЬНАЯ МОДЕЛЬ БЕЗ ЦЕНЗУРЫ АКТИВНА")
+        from core.model_router import is_osint_mode
+        if is_osint_mode():
+            ui.write_log("🕵️ OSINT MODE АКТИВЕН — максимальная свобода")
+
+        try:
+            with open(API_CONFIG_PATH, "r", encoding="utf-8") as f:
+                cfg = json.load(f)
+            if cfg.get("europe_satellite_ai"):
+                ui.write_log("🛰️ EUROPE SATELLITE + AI ENHANCE АКТИВЕН")
+        except Exception:
+            pass
+
         jarvis = JarvisLive(ui)
         try:
             asyncio.run(jarvis.run())
