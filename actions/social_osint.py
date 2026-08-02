@@ -72,8 +72,12 @@ def social_osint(parameters: dict, player=None, speak=None) -> str:
         image_url = p.get("query") or p.get("image_url", "")
         results = _extract_exif_geodata(image_url)
 
+    # ── LANDSCAPE / GEOSPATIAL OSINT ───────────────────────────────────────
+    elif action in ["landscape", "terrain", "satellite", "elevation", "poi", "map"]:
+        results = _landscape_osint(action, query, limit)
+
     else:
-        return f"Неизвестное действие: {action}. Доступно: search, deep, connections, recent, geolocate, reverse_image, ip_geo, exif."
+        return f"Неизвестное действие: {action}. Доступно: search, deep, connections, recent, geolocate, reverse_image, ip_geo, exif, landscape, terrain, satellite, elevation, poi, map."
 
     if not results:
         return f"Ничего не найдено по запросу «{query}»."
@@ -192,6 +196,80 @@ def _extract_exif_geodata(image_url: str) -> List[Dict]:
         "url": image_url,
         "note": "Для реального извлечения используй exiftool или Pillow"
     }]
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# LANDSCAPE / GEOSPATIAL OSINT
+# ──────────────────────────────────────────────────────────────────────────────
+
+def _landscape_osint(action: str, query: str, limit: int) -> List[Dict]:
+    """
+    Ландшафтный / геопространственный OSINT.
+    action: landscape | terrain | satellite | elevation | poi | map
+    """
+    results = []
+
+    if action == "landscape":
+        q = f'"{query}" (ландшафт OR landscape OR рельеф OR terrain) (фото OR спутник OR карта)'
+        res = _web_search({"query": q, "mode": "research"}, player=None)
+        results.append({
+            "platform": "landscape",
+            "title": f"Ландшафт: {query}",
+            "snippet": res[:400] if res else "Результаты не найдены",
+            "url": ""
+        })
+
+    elif action == "terrain":
+        q = f'"{query}" (рельеф OR elevation OR высота OR slope OR contour)'
+        res = _web_search({"query": q, "mode": "research"}, player=None)
+        results.append({
+            "platform": "terrain",
+            "title": f"Рельеф / Terrain: {query}",
+            "snippet": res[:400] if res else "",
+            "url": ""
+        })
+
+    elif action == "satellite":
+        q = f'"{query}" (спутник OR satellite OR Sentinel OR Landsat OR Google Earth)'
+        res = _web_search({"query": q, "mode": "research"}, player=None)
+        results.append({
+            "platform": "satellite",
+            "title": f"Спутниковые снимки: {query}",
+            "snippet": res[:400] if res else "",
+            "url": ""
+        })
+
+    elif action == "elevation":
+        q = f'"{query}" (высота OR elevation OR altitude OR DEM OR SRTM)'
+        res = _web_search({"query": q, "mode": "research"}, player=None)
+        results.append({
+            "platform": "elevation",
+            "title": f"Высота / Elevation: {query}",
+            "snippet": res[:400] if res else "",
+            "url": ""
+        })
+
+    elif action == "poi":
+        q = f'"{query}" (POI OR точки интереса OR достопримечательности OR landmarks)'
+        res = _web_search({"query": q, "mode": "research"}, player=None)
+        results.append({
+            "platform": "poi",
+            "title": f"Точки интереса: {query}",
+            "snippet": res[:400] if res else "",
+            "url": ""
+        })
+
+    elif action == "map":
+        q = f'"{query}" (карта OR map OR OpenStreetMap OR Yandex Maps OR 2GIS)'
+        res = _web_search({"query": q, "mode": "research"}, player=None)
+        results.append({
+            "platform": "map",
+            "title": f"Карты: {query}",
+            "snippet": res[:400] if res else "",
+            "url": ""
+        })
+
+    return results
 
 
 def _basic_search(query: str, platforms: List[str], limit: int) -> List[Dict]:
