@@ -29,6 +29,9 @@ from pathlib import Path
 
 _CONFIG = Path(__file__).resolve().parent.parent / "config"
 _FACES_DIR = _CONFIG / "faces"
+# Automatically captured faces are kept separately from enrolled identities.
+# The leading underscore also makes the directory invisible to the recogniser.
+_AUTO_FACES_DIR = _FACES_DIR / "_auto"
 _YUNET_FILE = _CONFIG / "face_detection_yunet.onnx"
 _MODEL_FILE = _CONFIG / "face_lbph.yml"
 
@@ -70,6 +73,7 @@ class FaceEngine:
         self._labels: dict[int, str] = {}
         self._detector_kind = "none"
         self._last_size = (0, 0)
+        self._auto_lock = threading.Lock()
 
     # ── setup ───────────────────────────────────────────────────────────
     def _ensure(self) -> None:
@@ -135,7 +139,8 @@ class FaceEngine:
             samples, labels, names = [], [], {}
             if _FACES_DIR.is_dir():
                 for idx, person in enumerate(
-                        sorted(p for p in _FACES_DIR.iterdir() if p.is_dir())):
+                        sorted(p for p in _FACES_DIR.iterdir()
+                               if p.is_dir() and not p.name.startswith("_"))):
                     got = 0
                     for img_path in sorted(person.iterdir()):
                         if img_path.suffix.lower() not in (
@@ -335,6 +340,66 @@ class FaceEngine:
             print(f"[FaceID] detect failed: {e}")
             return []
 
+    def save_new_faces(self, frame_bytes: bytes, faces: list[dict]) -> int:
+        """Save faces seen for the first time, without saving every video frame.
+
+        Captures are deliberately not enrolled: automatic snapshots must not
+        make an unknown person look like a named identity.  A perceptual hash
+        of the normalised face crop is compared with previous captures, so a
+        face moving slightly in the camera is still treated as the same face.
+        """
+        self._ensure()
+        cv2, np = self._cv2, self._np
+        if cv2 is None or not frame_bytes or not faces:
+            return 0
+        try:
+            bgr = cv2.imdecode(np.frombuffer(frame_bytes, np.uint8), cv2.IMREAD_COLOR)
+            if bgr is None:
+                return 0
+            H, W = bgr.shape[:2]
+            captures = []
+            for f in faces:
+                # Named/enrolled faces are already stored; never duplicate them.
+                if f.get("known"):
+                    continue
+                box = f.get("box")
+                if not isinstance(box, (list, tuple)) or len(box) != 4:
+                    continue
+                y0, x0, y1, x1 = (float(v) for v in box)
+                x, y = int(x0 * W / 1000), int(y0 * H / 1000)
+                x2, y2 = int(x1 * W / 1000), int(y1 * H / 1000)
+                crop = bgr[max(0, y):min(H, y2), max(0, x):min(W, x2)]
+                if crop.size and crop.shape[0] >= 20 and crop.shape[1] >= 20:
+                    captures.append(cv2.resize(crop, (32, 32), interpolation=cv2.INTER_AREA))
+            if not captures:
+                return 0
+            def phash(img):
+                gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+                dct = cv2.dct(np.float32(gray))[:8, :8]
+                return dct > np.median(dct[1:, 1:])
+            with self._auto_lock:
+                _AUTO_FACES_DIR.mkdir(parents=True, exist_ok=True)
+                old = []
+                for path in _AUTO_FACES_DIR.glob("*.jpg"):
+                    img = cv2.imread(str(path), cv2.IMREAD_COLOR)
+                    if img is not None:
+                        old.append(phash(img))
+                saved = 0
+                stamp = int(time.time() * 1000)
+                for i, crop in enumerate(captures):
+                    signature = phash(crop)
+                    # Hamming distance <= 12 means this is the same face/view.
+                    if any(int(np.count_nonzero(signature != prev)) <= 12 for prev in old):
+                        continue
+                    path = _AUTO_FACES_DIR / f"{stamp}_{i}.jpg"
+                    if cv2.imwrite(str(path), crop):
+                        old.append(signature)
+                        saved += 1
+                return saved
+        except Exception as e:
+            print(f"[FaceID] automatic capture failed: {e}")
+            return 0
+
     def _identify(self, gray, x, y, w, h):
         """Crop → (name, confidence%) or (None, 0) when unknown."""
         if self._recognizer is None:
@@ -429,3 +494,8 @@ def detect_faces(frame_bytes: bytes) -> list[dict]:
 def enroll(frame_bytes: bytes, name: str) -> bool:
     """Teach the system a new face from the current frame."""
     return get_engine().enroll_from_frame(frame_bytes, name)
+
+
+def save_new_faces(frame_bytes: bytes, faces: list[dict]) -> int:
+    """Save only face appearances not already captured on disk."""
+    return get_engine().save_new_faces(frame_bytes, faces)
