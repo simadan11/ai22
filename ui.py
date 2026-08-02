@@ -3543,6 +3543,15 @@ class MainWindow(QMainWindow):
         lay.addWidget(self._local_claude_btn)
         self._update_local_claude_btn(_read_full_config().get("use_local_claude", False))
 
+        # ── OSINT Mode toggle ───────────────────────────────────────────────
+        self._osint_btn = QPushButton()
+        self._osint_btn.setFixedHeight(28)
+        self._osint_btn.setFont(QFont("Courier New", 7))
+        self._osint_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._osint_btn.clicked.connect(self._toggle_osint)
+        lay.addWidget(self._osint_btn)
+        self._update_osint_btn(_read_full_config().get("osint_mode", False))
+
         # ── system monitor (was the left panel) ───────────────────────────
         lay.addSpacing(4)
         self._left_panel.setMinimumWidth(0)
@@ -3991,6 +4000,43 @@ class MainWindow(QMainWindow):
         else:
             self._local_claude_btn.setText("🧠  LOCAL CLAUDE: OFF")
             self._local_claude_btn.setStyleSheet(f"""
+                QPushButton {{
+                    background: {C.PANEL2}; color: {C.TEXT_DIM};
+                    border: 1px solid {C.BORDER}; border-radius: 3px;
+                    text-align: left; padding: 0 8px;
+                }}
+                QPushButton:hover {{ color: {C.TEXT}; border: 1px solid {C.BORDER_B}; }}
+            """)
+
+    # ── OSINT Mode ─────────────────────────────────────────────────────────
+    def _toggle_osint(self):
+        cfg = _read_full_config()
+        new_val = not cfg.get("osint_mode", False)
+        cfg["osint_mode"] = new_val
+        try:
+            API_FILE.write_text(json.dumps(cfg, indent=4), encoding="utf-8")
+        except Exception:
+            pass
+        self._update_osint_btn(new_val)
+        status = "ON (OSINT — без цензуры)" if new_val else "OFF"
+        self._log.append_log(f"SYS: OSINT Mode — {status}")
+
+    def _update_osint_btn(self, enabled: bool):
+        if not hasattr(self, '_osint_btn'):
+            return
+        if enabled:
+            self._osint_btn.setText("🕵️  OSINT MODE: ON")
+            self._osint_btn.setStyleSheet(f"""
+                QPushButton {{
+                    background: #2a1a00; color: {C.ACC};
+                    border: 1px solid {C.ACC}; border-radius: 3px;
+                    text-align: left; padding: 0 8px;
+                }}
+                QPushButton:hover {{ background: #3a2500; }}
+            """)
+        else:
+            self._osint_btn.setText("🕵️  OSINT MODE: OFF")
+            self._osint_btn.setStyleSheet(f"""
                 QPushButton {{
                     background: {C.PANEL2}; color: {C.TEXT_DIM};
                     border: 1px solid {C.BORDER}; border-radius: 3px;

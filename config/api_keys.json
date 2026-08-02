@@ -7,5 +7,6 @@
     "use_local_claude": false,
     "local_claude_base_url": "http://localhost:11434/v1",
     "local_claude_api_key": "ollama",
-    "local_claude_model": "claude-3-sonnet"
+    "local_claude_model": "claude-3-sonnet",
+    "osint_mode": false
 }

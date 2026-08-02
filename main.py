@@ -1907,6 +1907,9 @@ def main():
         print_model_status()
         if is_local_mode():
             ui.write_log("🧠 ЛОКАЛЬНАЯ МОДЕЛЬ БЕЗ ЦЕНЗУРЫ АКТИВНА")
+        from core.model_router import is_osint_mode
+        if is_osint_mode():
+            ui.write_log("🕵️ OSINT MODE АКТИВЕН — максимальная свобода")
 
         jarvis = JarvisLive(ui)
         try:
