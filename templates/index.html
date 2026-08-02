@@ -1,0 +1,127 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Командный центр - Вход</title>
+    <style>
+        body { font-family: Arial, sans-serif; text-align: center; background-color: #f4f4f9; padding: 50px; }
+        .container { background: white; padding: 20px; border-radius: 10px; display: inline-block; box-shadow: 0 0 10px rgba(0,0,0,0.1); }
+        video, canvas { width: 320px; height: 240px; background: black; border-radius: 5px; }
+        button { padding: 10px 20px; margin: 10px; cursor: pointer; border: none; background: #007bff; color: white; border-radius: 5px; }
+        button:hover { background: #0056b3; }
+        input { padding: 10px; margin: 10px; width: 200px; border: 1px solid #ccc; border-radius: 5px; }
+        .hidden { display: none; }
+    </style>
+</head>
+<body>
+
+    <div class="container">
+        <h2>Командный центр</h2>
+        
+        {% if user %}
+            <p>Вы вошли как {{ user.username }}. <a href="/dashboard">Перейти в панель</a></p>
+            <button onclick="logout()">Выйти</button>
+        {% else %}
+            <div>
+                <button onclick="showLogin()">Вход по лицу</button>
+                <button onclick="showRegister()">Запрос доступа</button>
+            </div>
+            
+            <div id="video-container" class="hidden">
+                <video id="video" autoplay></video>
+                <canvas id="canvas" class="hidden"></canvas>
+                <br>
+                <div id="login-form" class="hidden">
+                    <button onclick="captureAndLogin()">Войти</button>
+                </div>
+                <div id="register-form" class="hidden">
+                    <input type="text" id="username" placeholder="Ваше имя (логин)">
+                    <button onclick="captureAndRegister()">Отправить заявку</button>
+                </div>
+                <p id="message"></p>
+            </div>
+        {% endif %}
+    </div>
+
+    <script>
+        const video = document.getElementById('video');
+        const canvas = document.getElementById('canvas');
+        const messageEl = document.getElementById('message');
+        
+        let stream = null;
+
+        async function startCamera() {
+            if (!stream) {
+                try {
+                    stream = await navigator.mediaDevices.getUserMedia({ video: true });
+                    video.srcObject = stream;
+                } catch (err) {
+                    alert("Ошибка доступа к камере. Убедитесь, что разрешили доступ.");
+                }
+            }
+        }
+
+        function showLogin() {
+            document.getElementById('video-container').classList.remove('hidden');
+            document.getElementById('login-form').classList.remove('hidden');
+            document.getElementById('register-form').classList.add('hidden');
+            messageEl.innerText = "";
+            startCamera();
+        }
+
+        function showRegister() {
+            document.getElementById('video-container').classList.remove('hidden');
+            document.getElementById('register-form').classList.remove('hidden');
+            document.getElementById('login-form').classList.add('hidden');
+            messageEl.innerText = "";
+            startCamera();
+        }
+        
+        function capturePhoto() {
+            canvas.width = video.videoWidth;
+            canvas.height = video.videoHeight;
+            canvas.getContext('2d').drawImage(video, 0, 0, canvas.width, canvas.height);
+            return new Promise(resolve => canvas.toBlob(resolve, 'image/png'));
+        }
+
+        async function captureAndLogin() {
+            messageEl.innerText = "Распознавание...";
+            const blob = await capturePhoto();
+            const formData = new FormData();
+            formData.append("photo", blob, "photo.png");
+
+            const response = await fetch("/api/login", { method: "POST", body: formData });
+            const data = await response.json();
+            
+            if (data.status === "success") {
+                window.location.href = data.redirect;
+            } else {
+                messageEl.innerText = data.message;
+            }
+        }
+
+        async function captureAndRegister() {
+            const username = document.getElementById('username').value;
+            if (!username) {
+                alert("Введите имя!");
+                return;
+            }
+            messageEl.innerText = "Отправка...";
+            const blob = await capturePhoto();
+            const formData = new FormData();
+            formData.append("username", username);
+            formData.append("photo", blob, "photo.png");
+
+            const response = await fetch("/api/register", { method: "POST", body: formData });
+            const data = await response.json();
+            messageEl.innerText = data.message;
+        }
+
+        async function logout() {
+            await fetch("/api/logout", { method: "POST" });
+            window.location.reload();
+        }
+    </script>
+</body>
+</html>

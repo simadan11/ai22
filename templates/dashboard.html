@@ -1,0 +1,92 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <title>Командный центр</title>
+    <style>
+        body { font-family: Arial, sans-serif; padding: 20px; background: #333; color: #fff; }
+        .container { background: #444; padding: 20px; border-radius: 10px; max-width: 600px; margin: 0 auto; box-shadow: 0 0 10px rgba(0,0,0,0.5); }
+        .user-list { list-style: none; padding: 0; }
+        .user-item { padding: 10px; border-bottom: 1px solid #555; display: flex; justify-content: space-between; align-items: center; }
+        .status-active { color: #0f0; font-weight: bold; }
+        .status-inactive { color: #888; }
+        .header { display: flex; justify-content: space-between; align-items: center; }
+        a, button { color: #fff; text-decoration: none; background: #007bff; padding: 5px 10px; border-radius: 5px; border: none; cursor: pointer; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h2>Командный центр</h2>
+            <div>
+                <span>Привет, {{ username }}!</span>
+                <button onclick="logout()">Выйти</button>
+            </div>
+        </div>
+        
+        {% if username == 'admin' %}
+            <div style="margin-bottom: 20px;">
+                <a href="/admin">⚙️ Управление доступом</a>
+            </div>
+        {% endif %}
+
+        <h3>Активность пользователей</h3>
+        <ul class="user-list" id="users-list">
+            <li>Загрузка...</li>
+        </ul>
+    </div>
+
+    <script>
+        async function logout() {
+            await fetch("/api/logout", { method: "POST" });
+            window.location.href = "/";
+        }
+
+        async function fetchUsers() {
+            try {
+                const res = await fetch("/api/users/active");
+                if (!res.ok) return;
+                const users = await res.json();
+                const list = document.getElementById("users-list");
+                list.innerHTML = "";
+                users.forEach(u => {
+                    const li = document.createElement("li");
+                    li.className = "user-item";
+                    
+                    const nameSpan = document.createElement("span");
+                    nameSpan.textContent = u.username + (u.is_admin ? " (Админ)" : "");
+                    
+                    const statusSpan = document.createElement("span");
+                    if (u.is_active) {
+                        statusSpan.textContent = "В сети";
+                        statusSpan.className = "status-active";
+                    } else {
+                        statusSpan.textContent = "Не в сети";
+                        statusSpan.className = "status-inactive";
+                    }
+                    
+                    li.appendChild(nameSpan);
+                    li.appendChild(statusSpan);
+                    list.appendChild(li);
+                });
+            } catch (e) {
+                console.error(e);
+            }
+        }
+
+        async function sendPing() {
+            await fetch("/api/ping", { method: "POST" });
+        }
+
+        // Poll every 5 seconds
+        setInterval(() => {
+            sendPing();
+            fetchUsers();
+        }, 5000);
+
+        // Initial calls
+        sendPing();
+        fetchUsers();
+    </script>
+</body>
+</html>
