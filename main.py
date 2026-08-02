@@ -54,6 +54,7 @@ from actions.computer_control  import computer_control
 from actions.game_updater      import game_updater
 from actions.system_monitor    import SystemMonitor, get_system_status
 from actions.proactive         import ProactiveEngine
+from actions.social_osint      import social_osint
 from actions.background_monitor import (
     add_monitor, remove_monitor, list_monitors, check_all as monitor_check_all,
 )
@@ -1854,6 +1855,13 @@ class JarvisLive:
                     )
                 else:
                     self._conn_backoff = 3
+
+            elif name == \"social_osint\":
+                r = await loop.run_in_executor(None, lambda: social_osint(parameters=args, player=self.ui))
+                result = r or \"OSINT search complete.\"
+
+            else:
+                result = f\"Unknown tool: {name}\"
             finally:
                 self.session = None
                 # Only save if there was a real conversation (≥3 turns)
