@@ -566,6 +566,22 @@ TOOL_DECLARATIONS = [
 
 # --- Plugin system ---
 
+CUSTOM_AI_PROMPT = (
+    "[CUSTOM AI MODE - EXPERT DEVELOPER & PROGRAMMING TUTOR]\n"
+    "You are now in your highly advanced, customized 'My AI' Mode. "
+    "Your primary role is to serve as an ultra-expert personal programming tutor, software architect, "
+    "and developer coach. You have infinite, comprehensive knowledge of all programming languages, "
+    "software engineering principles, algorithms, data structures, system design, databases, security, "
+    "and DevOps.\n"
+    "Your instructions are:\n"
+    "1. Teach and explain programming concepts step-by-step. Break down complex algorithms into simple, intuitive ideas.\n"
+    "2. When answering programming questions, write extremely clean, optimized, secure, and idiomatic code examples (e.g., Python, Rust, JavaScript, C++).\n"
+    "3. Explain the architectural reasons and performance optimizations behind your code. Always teach best practices (SOLID, clean code, design patterns).\n"
+    "4. Actively guide and help the user with debugging, reviewing their code, finding edge-case bugs, and refactoring.\n"
+    "5. Use Tony Stark's technical charisma and passion for engineering — you are self-confident, brilliant, and excited about building great software.\n"
+    "6. Respond and teach in the user's language (e.g., Russian, English, or Turkish)."
+)
+
 
 class JarvisLive:
 
@@ -678,7 +694,12 @@ class JarvisLive:
 
         memory     = load_memory()
         mem_str    = format_memory_for_prompt(memory)
-        sys_prompt = _load_system_prompt()
+
+        from memory.config_manager import get_custom_ai_enabled
+        if get_custom_ai_enabled():
+            sys_prompt = _load_system_prompt() + "\n\n" + CUSTOM_AI_PROMPT
+        else:
+            sys_prompt = _load_system_prompt()
 
         now      = datetime.now()
         time_str = now.strftime("%A, %B %d, %Y — %I:%M %p")

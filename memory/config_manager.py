@@ -89,3 +89,19 @@ def save_brief_enabled(enabled: bool) -> None:
             data = {}
     data["morning_brief_enabled"] = enabled
     CONFIG_FILE.write_text(json.dumps(data, indent=4), encoding="utf-8")
+
+
+def get_custom_ai_enabled() -> bool:
+    return load_api_keys().get("custom_ai_enabled", False)
+
+
+def save_custom_ai_enabled(enabled: bool) -> None:
+    ensure_config_dir()
+    data: dict = {}
+    if CONFIG_FILE.exists():
+        try:
+            data = json.loads(CONFIG_FILE.read_text(encoding="utf-8"))
+        except Exception:
+            data = {}
+    data["custom_ai_enabled"] = enabled
+    CONFIG_FILE.write_text(json.dumps(data, indent=4), encoding="utf-8")

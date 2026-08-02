@@ -2082,6 +2082,8 @@ class MainWindow(QMainWindow):
         self._update_autostart_btn(self._check_autostart())
         from memory.config_manager import get_brief_enabled as _gbe
         self._update_brief_btn(_gbe())
+        from memory.config_manager import get_custom_ai_enabled as _gcae
+        self._update_custom_ai_btn(_gcae())
 
         self._clock_tmr = QTimer(self)
         self._clock_tmr.timeout.connect(self._tick_clock)
@@ -3534,6 +3536,13 @@ class MainWindow(QMainWindow):
         self._brief_btn.clicked.connect(self._toggle_brief)
         lay.addWidget(self._brief_btn)
 
+        self._custom_ai_btn = QPushButton()
+        self._custom_ai_btn.setFixedHeight(28)
+        self._custom_ai_btn.setFont(QFont("Courier New", 7))
+        self._custom_ai_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._custom_ai_btn.clicked.connect(self._toggle_custom_ai)
+        lay.addWidget(self._custom_ai_btn)
+
         # ── system monitor (was the left panel) ───────────────────────────
         lay.addSpacing(4)
         self._left_panel.setMinimumWidth(0)
@@ -3945,6 +3954,40 @@ class MainWindow(QMainWindow):
         else:
             self._brief_btn.setText("☀  MORNING BRIEF: OFF")
             self._brief_btn.setStyleSheet(f"""
+                QPushButton {{
+                    background: transparent; color: {C.TEXT_DIM};
+                    border: 1px solid {C.BORDER}; border-radius: 3px;
+                    text-align: left; padding: 0 8px;
+                }}
+                QPushButton:hover {{ color: {C.TEXT}; border: 1px solid {C.BORDER_B}; }}
+            """)
+
+    def _toggle_custom_ai(self):
+        from memory.config_manager import get_custom_ai_enabled, save_custom_ai_enabled
+        new_val = not get_custom_ai_enabled()
+        save_custom_ai_enabled(new_val)
+        self._update_custom_ai_btn(new_val)
+        self._log.append_log(
+            f"SYS: AI Mode switched to {'MY AI' if new_val else 'GEMINI'}. "
+            "Please restart JARVIS session to apply prompt changes."
+        )
+
+    def _update_custom_ai_btn(self, enabled: bool):
+        if not hasattr(self, '_custom_ai_btn'):
+            return
+        if enabled:
+            self._custom_ai_btn.setText("💻  AI MODE: MY AI")
+            self._custom_ai_btn.setStyleSheet(f"""
+                QPushButton {{
+                    background: #0d1b2a; color: {C.ACC};
+                    border: 1px solid {C.PRI_DIM}; border-radius: 3px;
+                    text-align: left; padding: 0 8px;
+                }}
+                QPushButton:hover {{ background: #1b263b; }}
+            """)
+        else:
+            self._custom_ai_btn.setText("💻  AI MODE: GEMINI")
+            self._custom_ai_btn.setStyleSheet(f"""
                 QPushButton {{
                     background: transparent; color: {C.TEXT_DIM};
                     border: 1px solid {C.BORDER}; border-radius: 3px;
