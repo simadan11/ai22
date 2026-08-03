@@ -11,6 +11,9 @@ import threading
 import time
 from pathlib import Path
 
+# Prevent SetProcessDpiAwarenessContext errors on Windows
+os.environ.setdefault("QT_ENABLE_HIGHDPI_SCALING", "0")
+
 import psutil
 
 if platform.system() == "Windows":
@@ -938,7 +941,7 @@ class FileDropZone(QWidget):
 
     def _browse(self):
         path, _ = QFileDialog.getOpenFileName(
-            self, "Select a file for JARVIS", str(Path.home()),
+            self, "Select a file for EDIT", str(Path.home()),
             "All Files (*.*);;"
             "Images (*.jpg *.jpeg *.png *.gif *.webp *.bmp *.svg);;"
             "Documents (*.pdf *.docx *.txt *.md *.pptx);;"
@@ -1353,7 +1356,7 @@ class CustomizeOverlay(QWidget):
     saved = pyqtSignal(str, str, str)   # assistant_name, user_name, ui_color
     _OW, _OH = 400, 500
 
-    def __init__(self, assistant_name="JARVIS", user_name="",
+    def __init__(self, assistant_name="EDIT", user_name="",
                  ui_color=DEFAULT_UI_COLOR, parent=None):
         super().__init__(parent)
         self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
@@ -1513,7 +1516,7 @@ class CustomizeOverlay(QWidget):
         self.hide()
 
     def _save(self):
-        name = self._name_input.text().strip() or "JARVIS"
+        name = self._name_input.text().strip() or "EDIT"
         user = self._user_input.text().strip()
         self.saved.emit(name, user, self._sel_color or DEFAULT_UI_COLOR)
         self.hide()
@@ -1909,7 +1912,7 @@ class RemoteKeyOverlay(QWidget):
         self._qr_label.setStyleSheet(
             "color: #00ff88; background: #001a0d; border-radius: 10px;"
         )
-        self._timer_lbl.setText("Phone connected — JARVIS ready")
+        self._timer_lbl.setText("Phone connected — EDIT ready")
         self._timer_lbl.setStyleSheet(f"color: {C.GREEN}; background: transparent;")
 
     def _refresh_key(self):
@@ -1966,7 +1969,7 @@ class MainWindow(QMainWindow):
 
         # Load customization from config
         _cfg = _read_full_config()
-        self._assistant_name: str = (_cfg.get("assistant_name") or "JARVIS").strip()
+        self._assistant_name: str = (_cfg.get("assistant_name") or "EDIT").strip()
         _display = self._assistant_name.upper()
 
         # Kayıtlı UI rengini panel/stylesheet'ler kurulmadan ÖNCE uygula
@@ -3561,20 +3564,37 @@ class MainWindow(QMainWindow):
         lay.addWidget(self._europe_ai_btn)
         self._update_europe_ai_btn(_read_full_config().get("europe_satellite_ai", False))
 
-        # ── Открыть OSINT Hub ───────────────────────────────────────────────
-        hub_btn = QPushButton("🛰️  OPEN OSINT HUB")
+        # ── Открыть GEOINT / OSINT Hub ───────────────────────────────────────
+        hub_btn = QPushButton("🛰️  GEOINT / Карта военных баз")
+        hub_btn.setToolTip("Интерактивная карта: активные и заброшенные базы, техника, РЛС, бункеры (Google Maps, OSM, Esri)")
         hub_btn.setFixedHeight(28)
-        hub_btn.setFont(QFont("Courier New", 7, QFont.Weight.Bold))
+        hub_btn.setFont(QFont("Segoe UI", 8, QFont.Weight.Bold))
         hub_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         hub_btn.setStyleSheet(f"""
             QPushButton {{
-                background: #001a2e; color: {C.PRI};
+                background: #002436; color: {C.PRI};
                 border: 1px solid {C.PRI}; border-radius: 4px;
             }}
-            QPushButton:hover {{ background: #002a4a; }}
+            QPushButton:hover {{ background: #003b58; color: #fff; }}
         """)
         hub_btn.clicked.connect(self._open_osint_hub)
         lay.addWidget(hub_btn)
+
+        # ── Открыть Google Maps / Спутник в браузере ─────────────────────────
+        browser_map_btn = QPushButton("🌐  Google Maps / Спутник (Браузер)")
+        browser_map_btn.setToolTip("Открыть интерактивную карту со всеми отмеченными базами и спутником в браузере")
+        browser_map_btn.setFixedHeight(26)
+        browser_map_btn.setFont(QFont("Segoe UI", 7, QFont.Weight.Bold))
+        browser_map_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        browser_map_btn.setStyleSheet(f"""
+            QPushButton {{
+                background: #001e14; color: #00ff88;
+                border: 1px solid #00ff88; border-radius: 4px;
+            }}
+            QPushButton:hover {{ background: #003624; color: #fff; }}
+        """)
+        browser_map_btn.clicked.connect(self._open_geoint_browser)
+        lay.addWidget(browser_map_btn)
 
         # ── system monitor (was the left panel) ───────────────────────────
         lay.addSpacing(4)
@@ -4107,23 +4127,25 @@ class MainWindow(QMainWindow):
             """)
 
     def _open_osint_hub(self):
-        """Открывает отдельное окно OSINT Hub с картой и спутниковыми снимками"""
+        """Открывает отдельное окно GEOINT / OSINT Hub с картой баз и спутником"""
         try:
             import subprocess
             import sys
             hub_path = str(Path(__file__).parent / "hub.py")
             subprocess.Popen([sys.executable, hub_path])
-            self._log.append_log("SYS: OSINT Hub открыт (отдельное окно)")
+            self._log.append_log("SYS: GEOINT / OSINT Hub открыт (карта 40+ военных баз)")
         except Exception as e:
-            self._log.append_log(f"ERR: Не удалось открыть Hub: {e}")
-            # Показываем инструкцию
-            from PyQt6.QtWidgets import QMessageBox
-            QMessageBox.information(
-                self,
-                "OSINT Hub",
-                "Чтобы открыть Hub, нужно установить:\n\npip install PyQt6-WebEngine\n\n"
-                "Затем перезапустите приложение."
-            )
+            self._log.append_log(f"ERR: Не удалось открыть Hub: {e}, открываю в браузере...")
+            self._open_geoint_browser()
+
+    def _open_geoint_browser(self):
+        """Открывает интерактивную GEOINT карту в браузере"""
+        try:
+            from actions.geoint_engine import open_map_in_browser
+            msg = open_map_in_browser()
+            self._log.append_log(f"SYS: {msg}")
+        except Exception as e:
+            self._log.append_log(f"ERR: Ошибка запуска карты в браузере: {e}")
 
     # ── Customization ────────────────────────────────────────────────────────────
 
@@ -4133,7 +4155,7 @@ class MainWindow(QMainWindow):
             self._customize_overlay.hide()
         cw = self.centralWidget()
         ov = CustomizeOverlay(
-            cfg.get("assistant_name", "JARVIS") or "JARVIS",
+            cfg.get("assistant_name", "EDIT") or "EDIT",
             cfg.get("user_name", ""),
             cfg.get("ui_color", "") or DEFAULT_UI_COLOR,
             parent=cw,
@@ -4158,12 +4180,14 @@ class MainWindow(QMainWindow):
 
     def _apply_name_update(self, name: str, user_name: str, ui_color: str = ""):
         """Update all name/theme-dependent UI elements and persist to config."""
-        self._assistant_name = name.strip() or "JARVIS"
+        self._assistant_name = name.strip() or "EDIT"
         display = self._assistant_name.upper()
         self.setWindowTitle(f"{display} — MARK XLIX")
         self._title_lbl.setText(display)
         if display in ("JARVIS", "J.A.R.V.I.S"):
             self._sub_lbl.setText("Just A Rather Very Intelligent System")
+        elif display in ("EDIT", "EDITH", "E.D.I.T.H.", "E.D.I.T.H", "ЭДИТ"):
+            self._sub_lbl.setText("Even Dead I'm The Hero — Autonomous Evolving AI")
         else:
             self._sub_lbl.setText("Personal AI Assistant")
         self._log._ai_name_lc = self._assistant_name.lower()
@@ -4297,7 +4321,7 @@ class MainWindow(QMainWindow):
             self._overlay.hide()
             self._overlay = None
         self._apply_state("LISTENING")
-        self._assistant_name = _read_full_config().get("assistant_name", "JARVIS") or "JARVIS"
+        self._assistant_name = _read_full_config().get("assistant_name", "EDIT") or "EDIT"
         self._log.append_log(f"SYS: Initialised. OS={os_name.upper()}. {self._assistant_name} online.")
 
 class _RootShim:

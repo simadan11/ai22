@@ -1,18 +1,44 @@
+import os as _os
 import platform as _platform
 import subprocess as _subprocess
+import sys as _sys
+
+# ── Force UTF-8 and replace errors on Windows to prevent cp1251 UnicodeDecodeError ──
+if hasattr(_sys.stdout, "reconfigure"):
+    try:
+        _sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+if hasattr(_sys.stderr, "reconfigure"):
+    try:
+        _sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+_os.environ["PYTHONIOENCODING"] = "utf-8"
 
 # ── Nuclear: force CREATE_NO_WINDOW on EVERY subprocess call on Windows ───────
 # This patches Popen itself, so no per-file flag is needed anywhere.
 if _platform.system() == "Windows":
     _OrigPopen = _subprocess.Popen
+    _OrigRun = _subprocess.run
 
     class _Popen(_OrigPopen):
         def __init__(self, args, **kw):
             kw["creationflags"] = kw.get("creationflags", 0) | _subprocess.CREATE_NO_WINDOW
             kw.pop("startupinfo", None)   # drop any stale/shared STARTUPINFO
+            if kw.get("text", False) or kw.get("universal_newlines", False):
+                kw.setdefault("encoding", "utf-8")
+                kw.setdefault("errors", "replace")
             super().__init__(args, **kw)
 
+    def _safe_run(*args, **kw):
+        if kw.get("text", False) or kw.get("universal_newlines", False):
+            kw.setdefault("encoding", "utf-8")
+            kw.setdefault("errors", "replace")
+        return _OrigRun(*args, **kw)
+
     _subprocess.Popen = _Popen
+    _subprocess.run = _safe_run
 # ─────────────────────────────────────────────────────────────────────────────
 
 import asyncio
@@ -72,7 +98,7 @@ def get_base_dir():
 BASE_DIR        = get_base_dir()
 API_CONFIG_PATH = BASE_DIR / "config" / "api_keys.json"
 PROMPT_PATH     = BASE_DIR / "core" / "prompt.txt"
-LIVE_MODEL          = "models/gemini-2.5-flash-native-audio-preview-12-2025"
+LIVE_MODEL          = "models/gemini-2.0-flash-exp"
 CHANNELS            = 1
 SEND_SAMPLE_RATE    = 16000
 RECEIVE_SAMPLE_RATE = 24000
@@ -104,7 +130,7 @@ def _load_system_prompt() -> str:
         return PROMPT_PATH.read_text(encoding="utf-8")
     except Exception:
         return (
-            "You are JARVIS, Tony Stark's AI assistant. "
+            "You are EDIT (EDITH), an ultra-capable, intelligent, autonomous, self-evolving AI assistant. "
             "Be concise, direct, and always use the provided tools to complete tasks. "
             "Never simulate or guess results — always call the appropriate tool."
         )
@@ -451,7 +477,7 @@ TOOL_DECLARATIONS = [
         "name": "manage_monitor",
         "description": (
             "Add, remove, or list background monitoring topics. "
-            "JARVIS checks these topics once a day and alerts the user when there is a new development. "
+            "EDIT checks these topics once a day and alerts the user when there is a new development. "
             "Use 'add' when the user says 'monitor X', 'track X', 'follow X'. "
             "Use 'remove' when the user says 'stop monitoring X'. "
             "Use 'list' when the user asks what is being monitored. "
@@ -581,16 +607,152 @@ TOOL_DECLARATIONS = [
             "required": ["category", "key", "value"]
         }
     },
+    {
+        "name": "self_improve",
+        "description": (
+            "Autonomous self-improvement and self-modification tool for EDIT. "
+            "Use this to improve your own codebase, redesign or modify your UI interface ('переделывать интерфейс', ui.py, hub.py, styles, colors), "
+            "add new functions and capabilities ('добавлять функции возможности'), or read/write/edit any file in the project."
+        ),
+        "parameters": {
+            "type": "OBJECT",
+            "properties": {
+                "action": {
+                    "type": "STRING",
+                    "description": "read_file | edit_file | write_file | list_files | redesign_ui | add_feature | inspect_code"
+                },
+                "file_path": {
+                    "type": "STRING",
+                    "description": "Relative file path in repository (e.g. 'ui.py', 'main.py', 'actions/weather_report.py')"
+                },
+                "old_text": {
+                    "type": "STRING",
+                    "description": "Exact or fuzzy text to search and replace (for edit_file)"
+                },
+                "new_text": {
+                    "type": "STRING",
+                    "description": "New text to replace old_text with (for edit_file)"
+                },
+                "content": {
+                    "type": "STRING",
+                    "description": "Full file content (for write_file)"
+                },
+                "description": {
+                    "type": "STRING",
+                    "description": "Human-readable description of the improvement or UI redesign"
+                }
+            },
+            "required": ["action"]
+        }
+    },
+    {
+        "name": "create_skill",
+        "description": (
+            "Creates and permanently registers a new custom skill/tool for EDIT ('делать навыки навеки'). "
+            "Saves the skill as a Python file in actions/custom_skills/ and registers it in the dynamic tool registry, "
+            "making it permanently available to you across all future sessions."
+        ),
+        "parameters": {
+            "type": "OBJECT",
+            "properties": {
+                "action": {
+                    "type": "STRING",
+                    "description": "create | list | remove | test (default: create)"
+                },
+                "skill_name": {
+                    "type": "STRING",
+                    "description": "Unique snake_case skill name (e.g. 'crypto_price', 'spotify_control')"
+                },
+                "description": {
+                    "type": "STRING",
+                    "description": "Description of what the skill does (used as the tool description)"
+                },
+                "parameters_schema": {
+                    "type": "STRING",
+                    "description": "JSON string describing tool parameters schema (type, properties, required)"
+                },
+                "python_code": {
+                    "type": "STRING",
+                    "description": "Complete Python code defining 'def run_skill(args, player=None): ...'"
+                }
+            },
+            "required": ["action"]
+        }
+    },
+    {
+        "name": "execute_command",
+        "description": (
+            "Executes arbitrary system/bash/terminal commands or Python scripts so EDIT can do absolutely anything the user wants ('полностью что я захочу'). "
+            "Can run terminal utilities, scripts, file commands, network inspections, package installations, or dynamic Python evaluation."
+        ),
+        "parameters": {
+            "type": "OBJECT",
+            "properties": {
+                "command": {
+                    "type": "STRING",
+                    "description": "Terminal command string or Python code to execute"
+                },
+                "mode": {
+                    "type": "STRING",
+                    "description": "bash | python (default: bash)"
+                },
+                "timeout": {
+                    "type": "INTEGER",
+                    "description": "Timeout in seconds (default: 15)"
+                }
+            },
+            "required": ["command"]
+        }
+    },
+    {
+        "name": "geoint_lookup",
+        "description": (
+            "Maximum GEOINT (Geospatial Intelligence) tool for EDIT. "
+            "Searches, analyzes, and displays active, abandoned, and historical military bases, airfields, radar sites (e.g. Duga), "
+            "bunkers, naval ports, and equipment locations on interactive maps (Google Maps, Google Satellite, OSM). "
+            "Always use this when the user asks about Google Maps, military sites, abandoned bases, satellite imagery, or GEOINT."
+        ),
+        "parameters": {
+            "type": "OBJECT",
+            "properties": {
+                "query": {
+                    "type": "STRING",
+                    "description": "Name of military base, country, keyword, or coordinates (e.g. 'Ramstein', 'Duga', 'abandoned bunkers')"
+                },
+                "category": {
+                    "type": "STRING",
+                    "description": "all | active | abandoned | radar | airbase | bunker | historic (default: all)"
+                },
+                "open_map": {
+                    "type": "BOOLEAN",
+                    "description": "Set True to automatically launch the interactive GEOINT map or browser"
+                },
+                "calc_distance_to": {
+                    "type": "STRING",
+                    "description": "Optional second base/location name to compute geodesic distance and bearing"
+                }
+            },
+            "required": ["query"]
+        }
+    },
 ]
 
-# --- Plugin system ---
+# --- Dynamic Skills & Self-Improvement System ---
+def get_all_tool_declarations() -> list[dict]:
+    try:
+        from actions.self_improve import get_custom_tool_declarations
+        custom_decls = get_custom_tool_declarations()
+    except Exception as e:
+        print(f"[EDIT] Warning loading custom tool declarations: {e}")
+        custom_decls = []
+    return TOOL_DECLARATIONS + custom_decls
 
 
 class JarvisLive:
 
     def __init__(self, ui: JarvisUI):
         self.ui             = ui
-        self._asst_name     = "JARVIS"   # updated each session from config
+        self._asst_name     = "EDIT"   # updated each session from config
         self.session              = None
         self.audio_in_queue       = None
         self.out_queue            = None
@@ -689,10 +851,10 @@ class JarvisLive:
         # Load customization from config
         try:
             _cfg = json.loads(open(API_CONFIG_PATH, encoding="utf-8").read())
-            self._asst_name = (_cfg.get("assistant_name") or "JARVIS").strip()
+            self._asst_name = (_cfg.get("assistant_name") or "EDIT").strip()
             _user_name = (_cfg.get("user_name") or "").strip()
         except Exception:
-            self._asst_name = "JARVIS"
+            self._asst_name = "EDIT"
             _user_name = ""
 
         memory     = load_memory()
@@ -710,12 +872,14 @@ class JarvisLive:
         # Identity injection — overrides any hardcoded name in prompt.txt
         _addr = (f"ADDRESS: Always call the user '{_user_name}'."
                  if _user_name
-                 else "ADDRESS: When speaking Turkish → always say \"efendim\". "
+                 else "ADDRESS: When speaking Russian → address politely and naturally in Russian. "
+                      "When speaking Turkish → always say \"efendim\". "
                       "When speaking English → say \"sir\". Never mix languages.")
         identity_ctx = (
             f"[IDENTITY]\n"
-            f"Your name is {self._asst_name}. "
-            f"Always refer to yourself as {self._asst_name}.\n"
+            f"Your name is {self._asst_name} (also known as EDITH / EDIT). "
+            f"Always refer to yourself as {self._asst_name}. Never call yourself JARVIS.\n"
+            f"You have autonomous self-improvement tools (self_improve, create_skill, execute_command).\n"
             f"{_addr}\n\n"
         )
 
@@ -729,7 +893,7 @@ class JarvisLive:
             output_audio_transcription={},
             input_audio_transcription={},
             system_instruction="\n".join(parts),
-            tools=[{"function_declarations": TOOL_DECLARATIONS}],
+            tools=[{"function_declarations": get_all_tool_declarations()}],
             session_resumption=types.SessionResumptionConfig(),
             speech_config=types.SpeechConfig(
                 voice_config=types.VoiceConfig(
@@ -912,6 +1076,30 @@ class JarvisLive:
                 else:
                     result = "Specify action (add/remove/list) and a topic."
 
+            elif name == "geoint_lookup":
+                from actions.geoint_engine import geoint_lookup as _geoint_lookup
+                r = await loop.run_in_executor(None, lambda: _geoint_lookup(parameters=args, player=self.ui, speak=self.speak))
+                result = r or "GEOINT lookup complete."
+
+            elif name == "social_osint":
+                r = await loop.run_in_executor(None, lambda: social_osint(parameters=args, player=self.ui))
+                result = r or "OSINT search complete."
+
+            elif name == "self_improve":
+                from actions.self_improve import self_improve as _self_improve
+                r = await loop.run_in_executor(None, lambda: _self_improve(parameters=args, player=self.ui, speak=self.speak))
+                result = r or "Done."
+
+            elif name == "create_skill":
+                from actions.self_improve import create_skill as _create_skill
+                r = await loop.run_in_executor(None, lambda: _create_skill(parameters=args, player=self.ui, speak=self.speak))
+                result = r or "Done."
+
+            elif name == "execute_command":
+                from actions.self_improve import execute_command as _execute_cmd
+                r = await loop.run_in_executor(None, lambda: _execute_cmd(parameters=args, player=self.ui, speak=self.speak))
+                result = r or "Done."
+
             elif name == "shutdown_jarvis":
                 self.ui.write_log("SYS: Shutdown requested.")
                 async def _do_shutdown():
@@ -930,7 +1118,12 @@ class JarvisLive:
                 asyncio.create_task(_do_shutdown())
 
             else:
-                result = f"Unknown tool: {name}"
+                from actions.self_improve import is_custom_skill, run_custom_skill
+                if is_custom_skill(name):
+                    r = await loop.run_in_executor(None, lambda: run_custom_skill(name, parameters=args, player=self.ui))
+                    result = r or f"Executed skill '{name}'."
+                else:
+                    result = f"Unknown tool: {name}"
 
         except Exception as e:
             result = f"Tool '{name}' failed: {e}"
@@ -1855,12 +2048,6 @@ class JarvisLive:
                     )
                 else:
                     self._conn_backoff = 3
-
-            if name == "social_osint":
-                r = await loop.run_in_executor(None, lambda: social_osint(parameters=args, player=self.ui))
-                result = r or "OSINT search complete."
-            else:
-                result = f"Unknown tool: {name}"
 
         self.set_speaking(False)
         self.ui.set_state("SLEEPING")
