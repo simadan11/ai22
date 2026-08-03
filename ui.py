@@ -13,6 +13,8 @@ from pathlib import Path
 
 # Prevent SetProcessDpiAwarenessContext errors on Windows
 os.environ.setdefault("QT_ENABLE_HIGHDPI_SCALING", "0")
+if platform.system() == "Windows" and "QT_QPA_PLATFORM" not in os.environ:
+    os.environ["QT_QPA_PLATFORM"] = "windows:dpiawareness=0"
 
 import psutil
 

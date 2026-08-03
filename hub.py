@@ -14,6 +14,8 @@ from pathlib import Path
 
 # Prevent SetProcessDpiAwarenessContext errors on Windows
 os.environ.setdefault("QT_ENABLE_HIGHDPI_SCALING", "0")
+if sys.platform.startswith("win") and "QT_QPA_PLATFORM" not in os.environ:
+    os.environ["QT_QPA_PLATFORM"] = "windows:dpiawareness=0"
 
 from PyQt6.QtCore import Qt, QUrl, QTimer
 from PyQt6.QtWidgets import (

@@ -98,7 +98,35 @@ def get_base_dir():
 BASE_DIR        = get_base_dir()
 API_CONFIG_PATH = BASE_DIR / "config" / "api_keys.json"
 PROMPT_PATH     = BASE_DIR / "core" / "prompt.txt"
-LIVE_MODEL          = "models/gemini-2.0-flash-exp"
+
+LIVE_MODEL_CANDIDATES = [
+    "models/gemini-2.0-flash-realtime-exp",
+    "gemini-2.0-flash-realtime-exp",
+    "models/gemini-2.0-flash-live-001",
+    "gemini-2.0-flash-live-001",
+    "models/gemini-2.0-flash",
+    "gemini-2.0-flash",
+    "models/gemini-2.5-flash-live",
+    "gemini-2.5-flash-live",
+    "models/gemini-2.5-flash",
+    "gemini-2.5-flash",
+    "models/gemini-3-flash-preview",
+    "gemini-3-flash-preview",
+    "models/gemini-2.5-flash-native-audio-preview-12-2025",
+    "models/gemini-2.0-flash-exp",
+]
+
+def get_current_live_model(idx: int = 0) -> str:
+    try:
+        _cfg = json.loads(open(API_CONFIG_PATH, encoding="utf-8").read())
+        custom_model = (_cfg.get("live_model") or "").strip()
+        if custom_model and idx == 0:
+            return custom_model
+    except Exception:
+        pass
+    return LIVE_MODEL_CANDIDATES[idx % len(LIVE_MODEL_CANDIDATES)]
+
+LIVE_MODEL          = "models/gemini-2.0-flash-realtime-exp"
 CHANNELS            = 1
 SEND_SAMPLE_RATE    = 16000
 RECEIVE_SAMPLE_RATE = 24000
@@ -1962,7 +1990,8 @@ class JarvisLive:
 
         while True:
             try:
-                print("[JARVIS] Connecting...")
+                current_model = get_current_live_model(getattr(self, "_live_model_idx", 0))
+                print(f"[EDIT] Connecting to Live API using model: {current_model}...")
                 self.ui.set_state("THINKING")
                 config = self._build_config()
 
@@ -1973,7 +2002,7 @@ class JarvisLive:
                 )
 
                 async with (
-                    client.aio.live.connect(model=LIVE_MODEL, config=config) as session,
+                    client.aio.live.connect(model=current_model, config=config) as session,
                     asyncio.TaskGroup() as tg,
                 ):
                     self.session          = session
@@ -1989,9 +2018,9 @@ class JarvisLive:
                     self._vision_last_time     = 0.0
                     self._interrupted          = False
 
-                    print("[JARVIS] Connected.")
+                    print(f"[EDIT] ✅ Connected to Live API ({current_model}).")
                     self.ui.set_state("LISTENING")
-                    self.ui.write_log("SYS: JARVIS online.")
+                    self.ui.write_log(f"SYS: EDIT online ({current_model}).")
 
                     if self._dashboard:
                         await self._dashboard.broadcast({"type": "status", "state": "active"})
@@ -2016,21 +2045,32 @@ class JarvisLive:
             except SystemExit:
                 raise
             except BaseException as e:
-                # Catches both Exception and BaseExceptionGroup (Python 3.11+
-                # TaskGroup raises BaseExceptionGroup when tasks are cancelled
-                # externally, which `except Exception` would miss, letting the
-                # exception escape the while-loop and causing asyncio.run() to
-                # start shutdown — resulting in "executor after shutdown" errors).
                 err_str = str(e)
-                print(f"[JARVIS] Error ({type(e).__name__}): {e}")
+                print(f"[EDIT] Error ({type(e).__name__}): {e}")
                 traceback.print_exc()
+
+                # Model compatibility error — switch to next available candidate in LIVE_MODEL_CANDIDATES
+                _model_err = any(k in err_str for k in (
+                    "1007", "1008", "not supported for bidiGenerateContent",
+                    "CONTENT_TYPE_AUDIO", "not found for API version", "model is not supported",
+                    "not found", "INVALID_ARGUMENT", "404"
+                ))
+                if _model_err:
+                    old_model = get_current_live_model(getattr(self, "_live_model_idx", 0))
+                    self._live_model_idx = getattr(self, "_live_model_idx", 0) + 1
+                    new_model = get_current_live_model(self._live_model_idx)
+                    self.ui.write_log(f"SYS: Модель {old_model} отклонила Live-канал → переключение на {new_model}")
+                    print(f"[EDIT] Model '{old_model}' not supported for bidiGenerateContent. Switching to '{new_model}'...")
+                    _conn_backoff = 1
+                    await asyncio.sleep(1)
+                    continue
 
                 # Invalid API key — stop hammering the API, prompt re-configuration
                 _auth_err = any(k in err_str for k in (
                     "API key not valid", "API_KEY_INVALID",
                     "invalid authentication credentials",
                     "ACCESS_TOKEN_TYPE_UNSUPPORTED",
-                    "UNAUTHENTICATED", "1007", "1008",
+                    "UNAUTHENTICATED",
                 ))
                 if _auth_err:
                     self.ui.write_log("ERR: API key invalid — please re-enter your key.")
@@ -2038,7 +2078,7 @@ class JarvisLive:
                     self.ui.prompt_reconfig()
                     while not self.ui._win._ready:
                         await asyncio.sleep(1)
-                    print("[JARVIS] New API key saved — reconnecting...")
+                    print("[EDIT] New API key saved — reconnecting...")
                     _conn_backoff = 3
                     continue
 
