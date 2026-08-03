@@ -1,0 +1,21 @@
+{
+    "skills": [
+        {
+            "name": "crypto_price",
+            "description": "Fetches current cryptocurrency price in USD (e.g. bitcoin, ethereum, solana). Created as a permanent custom skill.",
+            "parameters": {
+                "type": "OBJECT",
+                "properties": {
+                    "coin": {
+                        "type": "STRING",
+                        "description": "Cryptocurrency name (e.g. bitcoin, ethereum)"
+                    }
+                },
+                "required": [
+                    "coin"
+                ]
+            },
+            "file": "crypto_price.py"
+        }
+    ]
+}

@@ -1,7 +1,7 @@
 # actions/voice_features.py — интеграция функций из jarvis_import/core/
 """Wakeword, silence detection, TTS optimization, offline fallback."""
 
-WAKEWORDS = ["джарвис", "jarvis", "чарльз", "джервис"]
+WAKEWORDS = ["эдит", "edit", "edith", "едит", "эдита", "джарвис", "jarvis", "чарльз", "джервис"]
 
 
 def wakeword_detect(text: str) -> bool:
