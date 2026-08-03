@@ -3,5 +3,6 @@
     "os_system": "windows",
     "assistant_name": "EDIT",
     "user_name": "",
-    "ui_color": "#00d4ff"
+    "ui_color": "#00d4ff",
+    "live_model": "models/gemini-2.5-flash-native-audio-preview-12-2025"
 }

@@ -3,6 +3,12 @@ import platform as _platform
 import subprocess as _subprocess
 import sys as _sys
 
+# ── Prevent Qt DPI awareness warnings on Windows BEFORE any Qt library is loaded ──
+_os.environ["QT_ENABLE_HIGHDPI_SCALING"] = "0"
+_os.environ["QT_QPA_PLATFORM"] = "windows:dpiawareness=0"
+_os.environ["QT_SCALE_FACTOR"] = "1"
+_os.environ["QT_FONT_DPI"] = "96"
+
 # ── Force UTF-8 and replace errors on Windows to prevent cp1251 UnicodeDecodeError ──
 if hasattr(_sys.stdout, "reconfigure"):
     try:
@@ -100,6 +106,7 @@ API_CONFIG_PATH = BASE_DIR / "config" / "api_keys.json"
 PROMPT_PATH     = BASE_DIR / "core" / "prompt.txt"
 
 LIVE_MODEL_CANDIDATES = [
+    "models/gemini-2.5-flash-native-audio-preview-12-2025",
     "models/gemini-2.0-flash-realtime-exp",
     "gemini-2.0-flash-realtime-exp",
     "models/gemini-2.0-flash-live-001",
@@ -112,7 +119,6 @@ LIVE_MODEL_CANDIDATES = [
     "gemini-2.5-flash",
     "models/gemini-3-flash-preview",
     "gemini-3-flash-preview",
-    "models/gemini-2.5-flash-native-audio-preview-12-2025",
     "models/gemini-2.0-flash-exp",
 ]
 
@@ -126,7 +132,17 @@ def get_current_live_model(idx: int = 0) -> str:
         pass
     return LIVE_MODEL_CANDIDATES[idx % len(LIVE_MODEL_CANDIDATES)]
 
-LIVE_MODEL          = "models/gemini-2.0-flash-realtime-exp"
+def save_connected_live_model(model_name: str) -> None:
+    try:
+        if API_CONFIG_PATH.exists():
+            _cfg = json.loads(API_CONFIG_PATH.read_text(encoding="utf-8"))
+            if _cfg.get("live_model") != model_name:
+                _cfg["live_model"] = model_name
+                API_CONFIG_PATH.write_text(json.dumps(_cfg, indent=4, ensure_ascii=False), encoding="utf-8")
+    except Exception:
+        pass
+
+LIVE_MODEL          = "models/gemini-2.5-flash-native-audio-preview-12-2025"
 CHANNELS            = 1
 SEND_SAMPLE_RATE    = 16000
 RECEIVE_SAMPLE_RATE = 24000
@@ -2019,6 +2035,7 @@ class JarvisLive:
                     self._interrupted          = False
 
                     print(f"[EDIT] ✅ Connected to Live API ({current_model}).")
+                    save_connected_live_model(current_model)
                     self.ui.set_state("LISTENING")
                     self.ui.write_log(f"SYS: EDIT online ({current_model}).")
 
