@@ -3534,6 +3534,48 @@ class MainWindow(QMainWindow):
         self._brief_btn.clicked.connect(self._toggle_brief)
         lay.addWidget(self._brief_btn)
 
+        # ── Local Claude toggle ─────────────────────────────────────────────
+        self._local_claude_btn = QPushButton()
+        self._local_claude_btn.setFixedHeight(28)
+        self._local_claude_btn.setFont(QFont("Courier New", 7))
+        self._local_claude_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._local_claude_btn.clicked.connect(self._toggle_local_claude)
+        lay.addWidget(self._local_claude_btn)
+        self._update_local_claude_btn(_read_full_config().get("use_local_claude", False))
+
+        # ── OSINT Mode toggle ───────────────────────────────────────────────
+        self._osint_btn = QPushButton()
+        self._osint_btn.setFixedHeight(28)
+        self._osint_btn.setFont(QFont("Courier New", 7))
+        self._osint_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._osint_btn.clicked.connect(self._toggle_osint)
+        lay.addWidget(self._osint_btn)
+        self._update_osint_btn(_read_full_config().get("osint_mode", False))
+
+        # ── Europe Satellite + AI Enhance toggle ────────────────────────────
+        self._europe_ai_btn = QPushButton()
+        self._europe_ai_btn.setFixedHeight(28)
+        self._europe_ai_btn.setFont(QFont("Courier New", 7))
+        self._europe_ai_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._europe_ai_btn.clicked.connect(self._toggle_europe_ai)
+        lay.addWidget(self._europe_ai_btn)
+        self._update_europe_ai_btn(_read_full_config().get("europe_satellite_ai", False))
+
+        # ── Открыть OSINT Hub ───────────────────────────────────────────────
+        hub_btn = QPushButton("🛰️  OPEN OSINT HUB")
+        hub_btn.setFixedHeight(28)
+        hub_btn.setFont(QFont("Courier New", 7, QFont.Weight.Bold))
+        hub_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        hub_btn.setStyleSheet(f"""
+            QPushButton {{
+                background: #001a2e; color: {C.PRI};
+                border: 1px solid {C.PRI}; border-radius: 4px;
+            }}
+            QPushButton:hover {{ background: #002a4a; }}
+        """)
+        hub_btn.clicked.connect(self._open_osint_hub)
+        lay.addWidget(hub_btn)
+
         # ── system monitor (was the left panel) ───────────────────────────
         lay.addSpacing(4)
         self._left_panel.setMinimumWidth(0)
@@ -3952,6 +3994,136 @@ class MainWindow(QMainWindow):
                 }}
                 QPushButton:hover {{ color: {C.TEXT}; border: 1px solid {C.BORDER_B}; }}
             """)
+
+    # ── Local Claude (Ollama / LM Studio) toggle ─────────────────────────────
+    def _toggle_local_claude(self):
+        cfg = _read_full_config()
+        new_val = not cfg.get("use_local_claude", False)
+        cfg["use_local_claude"] = new_val
+        try:
+            API_FILE.write_text(json.dumps(cfg, indent=4), encoding="utf-8")
+        except Exception:
+            pass
+        self._update_local_claude_btn(new_val)
+        status = "ON (локальный Claude)" if new_val else "OFF (Gemini)"
+        self._log.append_log(f"SYS: Локальный Claude — {status}")
+
+    def _update_local_claude_btn(self, enabled: bool):
+        if not hasattr(self, '_local_claude_btn'):
+            return
+        if enabled:
+            self._local_claude_btn.setText("🧠  LOCAL CLAUDE: ON")
+            self._local_claude_btn.setStyleSheet(f"""
+                QPushButton {{
+                    background: #001a08; color: {C.GREEN};
+                    border: 1px solid {C.GREEN_D}; border-radius: 3px;
+                    text-align: left; padding: 0 8px;
+                }}
+                QPushButton:hover {{ background: #002010; }}
+            """)
+        else:
+            self._local_claude_btn.setText("🧠  LOCAL CLAUDE: OFF")
+            self._local_claude_btn.setStyleSheet(f"""
+                QPushButton {{
+                    background: {C.PANEL2}; color: {C.TEXT_DIM};
+                    border: 1px solid {C.BORDER}; border-radius: 3px;
+                    text-align: left; padding: 0 8px;
+                }}
+                QPushButton:hover {{ color: {C.TEXT}; border: 1px solid {C.BORDER_B}; }}
+            """)
+
+    # ── OSINT Mode ─────────────────────────────────────────────────────────
+    def _toggle_osint(self):
+        cfg = _read_full_config()
+        new_val = not cfg.get("osint_mode", False)
+        cfg["osint_mode"] = new_val
+        try:
+            API_FILE.write_text(json.dumps(cfg, indent=4), encoding="utf-8")
+        except Exception:
+            pass
+        self._update_osint_btn(new_val)
+        status = "ON (OSINT — без цензуры)" if new_val else "OFF"
+        self._log.append_log(f"SYS: OSINT Mode — {status}")
+
+    def _update_osint_btn(self, enabled: bool):
+        if not hasattr(self, '_osint_btn'):
+            return
+        if enabled:
+            self._osint_btn.setText("🕵️  OSINT MODE: ON")
+            self._osint_btn.setStyleSheet(f"""
+                QPushButton {{
+                    background: #2a1a00; color: {C.ACC};
+                    border: 1px solid {C.ACC}; border-radius: 3px;
+                    text-align: left; padding: 0 8px;
+                }}
+                QPushButton:hover {{ background: #3a2500; }}
+            """)
+        else:
+            self._osint_btn.setText("🕵️  OSINT MODE: OFF")
+            self._osint_btn.setStyleSheet(f"""
+                QPushButton {{
+                    background: {C.PANEL2}; color: {C.TEXT_DIM};
+                    border: 1px solid {C.BORDER}; border-radius: 3px;
+                    text-align: left; padding: 0 8px;
+                }}
+                QPushButton:hover {{ color: {C.TEXT}; border: 1px solid {C.BORDER_B}; }}
+            """)
+
+    # ── Europe Satellite + AI Enhance ─────────────────────────────────────
+    def _toggle_europe_ai(self):
+        cfg = _read_full_config()
+        new_val = not cfg.get("europe_satellite_ai", False)
+        cfg["europe_satellite_ai"] = new_val
+        try:
+            API_FILE.write_text(json.dumps(cfg, indent=4), encoding="utf-8")
+        except Exception:
+            pass
+        self._update_europe_ai_btn(new_val)
+        status = "ON (Европа + AI Enhance)" if new_val else "OFF"
+        self._log.append_log(f"SYS: Europe Satellite + AI — {status}")
+
+    def _update_europe_ai_btn(self, enabled: bool):
+        if not hasattr(self, '_europe_ai_btn'):
+            return
+        if enabled:
+            self._europe_ai_btn.setText("🛰️  EUROPE SAT + AI: ON")
+            self._europe_ai_btn.setStyleSheet(f"""
+                QPushButton {{
+                    background: #001a2e; color: {C.PRI};
+                    border: 1px solid {C.PRI}; border-radius: 3px;
+                    text-align: left; padding: 0 8px;
+                }}
+                QPushButton:hover {{ background: #002a4a; }}
+            """)
+        else:
+            self._europe_ai_btn.setText("🛰️  EUROPE SAT + AI: OFF")
+            self._europe_ai_btn.setStyleSheet(f"""
+                QPushButton {{
+                    background: {C.PANEL2}; color: {C.TEXT_DIM};
+                    border: 1px solid {C.BORDER}; border-radius: 3px;
+                    text-align: left; padding: 0 8px;
+                }}
+                QPushButton:hover {{ color: {C.TEXT}; border: 1px solid {C.BORDER_B}; }}
+            """)
+
+    def _open_osint_hub(self):
+        """Открывает отдельное окно OSINT Hub с картой и спутниковыми снимками"""
+        try:
+            import subprocess
+            import sys
+            hub_path = str(Path(__file__).parent / "hub.py")
+            subprocess.Popen([sys.executable, hub_path])
+            self._log.append_log("SYS: OSINT Hub открыт (отдельное окно)")
+        except Exception as e:
+            self._log.append_log(f"ERR: Не удалось открыть Hub: {e}")
+            # Показываем инструкцию
+            from PyQt6.QtWidgets import QMessageBox
+            QMessageBox.information(
+                self,
+                "OSINT Hub",
+                "Чтобы открыть Hub, нужно установить:\n\npip install PyQt6-WebEngine\n\n"
+                "Затем перезапустите приложение."
+            )
 
     # ── Customization ────────────────────────────────────────────────────────────
 
