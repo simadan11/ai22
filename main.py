@@ -654,36 +654,42 @@ TOOL_DECLARATIONS = [
     {
         "name": "self_improve",
         "description": (
-            "Autonomous self-improvement and self-modification tool for EDIT. "
-            "Use this to improve your own codebase, redesign or modify your UI interface ('переделывать интерфейс', ui.py, hub.py, styles, colors), "
-            "add new functions and capabilities ('добавлять функции возможности'), or read/write/edit any file in the project."
+            "Autonomous self-improvement and self-modification tool for EDIT V2. "
+            "Use this to improve your own codebase, redesign or modify your UI interface ('переделывать интерфейс', ui.py, hub.py, styles, colors, темы, кнопки), "
+            "add new functions and capabilities ('добавлять функции возможности', создать действие, виджет), or read/write/edit any file. "
+            "Features: fuzzy edit (не нужен exact match), auto backup + rollback, evolution log. "
+            "Triggers: переделай интерфейс, сделай кнопку, добавь функцию, улучши себя, поменяй цвет на..."
         ),
         "parameters": {
             "type": "OBJECT",
             "properties": {
                 "action": {
                     "type": "STRING",
-                    "description": "read_file | edit_file | write_file | list_files | redesign_ui | add_feature | inspect_code"
+                    "description": "read_file | edit_file | write_file | list_files | redesign_ui | add_feature | create_action | inspect_code | backup | rollback | list_backups | evolution_log"
                 },
                 "file_path": {
                     "type": "STRING",
-                    "description": "Relative file path in repository (e.g. 'ui.py', 'main.py', 'actions/weather_report.py')"
+                    "description": "Relative file path in repository (e.g. 'ui.py', 'main.py', 'actions/weather_report.py'). For rollback: target path to restore."
                 },
                 "old_text": {
                     "type": "STRING",
-                    "description": "Exact or fuzzy text to search and replace (for edit_file)"
+                    "description": "Exact or fuzzy text to search and replace (for edit_file). For rollback: backup filename to restore from."
                 },
                 "new_text": {
                     "type": "STRING",
-                    "description": "New text to replace old_text with (for edit_file)"
+                    "description": "New text to replace old_text with (for edit_file). Or new ui_color like #ff00ff for redesign_ui"
                 },
                 "content": {
                     "type": "STRING",
-                    "description": "Full file content (for write_file)"
+                    "description": "Full file content (for write_file / add_feature / create_action)"
                 },
                 "description": {
                     "type": "STRING",
-                    "description": "Human-readable description of the improvement or UI redesign"
+                    "description": "Human-readable description of the improvement, UI redesign, or new feature. Example: 'сделал неоновую тему' or 'добавил кнопку погоды'"
+                },
+                "ui_color": {
+                    "type": "STRING",
+                    "description": "Hex color for redesign_ui, e.g. #00ff88 - instantly previewed"
                 }
             },
             "required": ["action"]
@@ -746,6 +752,25 @@ TOOL_DECLARATIONS = [
                 }
             },
             "required": ["command"]
+        }
+    },
+    {
+        "name": "evolution_lab",
+        "description": (
+            "Evolution Laboratory — shows self-improvement status, backup history, evolution log. "
+            "Use when user asks: 'лаборатория эволюции', 'покажи что ты уже менял', 'история улучшений', "
+            "'demo интерфейса', or wants to see how self-modification works. "
+            "Actions: status | demo_ui (random neon color demo) | demo_skill (creates joke skill)"
+        ),
+        "parameters": {
+            "type": "OBJECT",
+            "properties": {
+                "action": {
+                    "type": "STRING",
+                    "description": "status | demo_ui | demo_skill"
+                }
+            },
+            "required": []
         }
     },
     {
@@ -1127,6 +1152,13 @@ class JarvisLive:
                     result = ("Monitoring: " + ", ".join(topics)) if topics else "No topics are being monitored."
                 else:
                     result = "Specify action (add/remove/list) and a topic."
+
+            elif name == "evolution_lab":
+                from actions.evolution_lab import evolution_lab as _evo_lab
+                r = await loop.run_in_executor(None, lambda: _evo_lab(parameters=args, player=self.ui, speak=self.speak))
+                result = r or "Evolution lab done."
+                if r:
+                    self.ui.show_content("EVOLUTION LAB — Self-Improvement Status", r)
 
             elif name == "geoint_lookup":
                 from actions.geoint_engine import geoint_lookup as _geoint_lookup
