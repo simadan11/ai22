@@ -723,6 +723,10 @@ TOOL_DECLARATIONS = [
                     "type": "STRING",
                     "description": "all | active | abandoned | radar | airbase | bunker | historic (default: all)"
                 },
+                "country": {
+                    "type": "STRING",
+                    "description": "all | ukraine | russia (default: all)"
+                },
                 "open_map": {
                     "type": "BOOLEAN",
                     "description": "Set True to automatically launch the interactive GEOINT map or browser"
@@ -730,6 +734,10 @@ TOOL_DECLARATIONS = [
                 "calc_distance_to": {
                     "type": "STRING",
                     "description": "Optional second base/location name to compute geodesic distance and bearing"
+                },
+                "ai_assess": {
+                    "type": "BOOLEAN",
+                    "description": "Set True to generate an AI GEOINT strategic assessment report"
                 }
             },
             "required": ["query"]
