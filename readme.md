@@ -76,13 +76,14 @@ The Remote Dashboard now turns your phone into JARVIS's eyes, Spider-Man style:
 
 ## ◈ Holo Lab — wearable / smart-glasses prototype
 
-Open **◈ HOLO** in the Remote Dashboard to get a software holographic workbench inspired by sci-fi HUDs:
+Open **◈ HOLO** in the Remote Dashboard — or open **◈ HOLO LAB / PC MONITOR** in the desktop settings drawer — to get a software holographic workbench inspired by sci-fi HUDs:
 
 1. Choose **Smart Optics** (glasses + camera), **AR Glove**, or **Field Suit**.
-2. Enter a project name and notes, then press **CREATE HOLOGRAM**. The server returns a session project ID such as `HOLO-A1B2C3`.
+2. Enter a project name and notes, then press **CREATE HOLOGRAM**. The server returns a session project ID such as `HOLO-A1B2C3` and mirrors the blueprint to the PC monitor.
 3. Inspect the animated concept in **HOLO**, **WIREFRAME**, **EXPLODED**, or **CLEAR VIEW** mode. The component list makes the camera, display, sensors, compute and power areas explicit.
-4. Start the camera feed and press **SCAN SPACE** to reuse the EDITH detector on the test feed. **ASK JARVIS ABOUT VIEW** sends one selected frame to the existing vision session for a spoken explanation.
-5. You can also say or type *"create smart glasses with a camera and show the parts"*. The new `holo_project` tool creates the same project and reports its ID in the main UI.
+4. On the PC, the overlay draws an AI blueprint, component schedule, optical camera beam and animated hologram directly in the desktop window.
+5. Start the camera feed and press **SCAN SPACE** to reuse the EDITH detector on the test feed. **ASK JARVIS ABOUT VIEW** sends one selected frame to the existing vision session for a spoken explanation.
+6. You can also say or type *"create smart glasses with a camera and show the parts"*. The `holo_project` tool generates the component list, opens the PC Holo Lab automatically and mirrors the project to connected dashboards.
 
 This is an honest software prototype: it renders a hologram-style visualization on a phone/PC screen and can use a camera, but it cannot create a physical free-space hologram or switch on hardware by itself. Before building any real wearable, validate optics, heat, battery safety, fit, privacy and local regulations.
 

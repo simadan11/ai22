@@ -329,6 +329,7 @@ TOOL_DECLARATIONS = [
                 "project_name": {"type": "STRING", "description": "Short name for the concept"},
                 "display_mode": {"type": "STRING", "description": "holo | wireframe | exploded | clear"},
                 "notes": {"type": "STRING", "description": "What the wearable should see, measure, or display"},
+                "components": {"type": "ARRAY", "items": {"type": "STRING"}, "description": "AI-generated component names for the blueprint"},
                 "clarity": {"type": "INTEGER", "description": "Visual contrast from 35 to 100"},
             },
             "required": ["prototype"]
@@ -1085,7 +1086,9 @@ class JarvisLive:
                             name=args.get("project_name") or "",
                             clarity=args.get("clarity", 85),
                             notes=args.get("notes") or "",
+                            components=args.get("components"),
                         )
+                        self.ui.show_holo_project(project)
                         await self._dashboard.broadcast({"type": "holo_project", "project": project})
                         self.ui.show_content(
                             "HOLO LAB — " + project["id"],
@@ -2043,6 +2046,7 @@ class JarvisLive:
             from dashboard.server import DashboardServer
             self._dashboard = DashboardServer()
             self._dashboard.set_connect_callback(self._on_phone_connected)
+            self._dashboard.set_holo_callback(self.ui.show_holo_project)
             asyncio.create_task(self._dashboard.serve())
             # Wire the Remote overlay's device hub (list + kick + revoke)
             def _kick_device(did: str) -> None:

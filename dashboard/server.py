@@ -558,6 +558,7 @@ class DashboardServer:
         self._command_queue               = asyncio.Queue()
         self._wake_callback               = None
         self._connect_callback            = None
+        self._holo_callback               = None
         self._pending_keys: dict[str, float] = {}
         self._device_sessions: dict[str, dict] = {}  # device_token → {session_key}
         self._phone_audio_queue: asyncio.Queue    = asyncio.Queue(maxsize=200)
@@ -620,6 +621,10 @@ class DashboardServer:
     def set_connect_callback(self, fn) -> None:
         self._connect_callback = fn
 
+    def set_holo_callback(self, fn) -> None:
+        """Called when a dashboard or voice command creates a Holo project."""
+        self._holo_callback = fn
+
     def create_holo_project(
         self,
         model: str = "glasses",
@@ -627,6 +632,7 @@ class DashboardServer:
         name: str = "",
         clarity: int = 85,
         notes: str = "",
+        components=None,
     ) -> dict:
         """Create one sanitized, session-scoped visual wearable prototype."""
         allowed_models = {"glasses", "glove", "suit"}
@@ -647,6 +653,15 @@ class DashboardServer:
             clarity = int(clarity)
         except (TypeError, ValueError):
             clarity = 85
+        default_components = {
+            "glasses": ["OPTICAL CAMERA", "HUD LENS", "EDGE SENSOR", "TEMPLE COMPUTE + BATTERY"],
+            "glove": ["PALM DISPLAY", "FINGER SENSORS", "WRIST CAMERA", "REMOVABLE POWER MODULE"],
+            "suit": ["CHEST SENSOR CORE", "HEAD OPTICS", "MOTION SENSORS", "SERVICE PORT"],
+        }
+        raw_components = components if isinstance(components, (list, tuple)) else []
+        clean_components = [_clean(item, 72, "COMPONENT") for item in raw_components[:12]]
+        if not clean_components:
+            clean_components = default_components[model]
         project = {
             "id": "HOLO-" + secrets.token_hex(3).upper(),
             "name": _clean(name, 64, "Untitled wearable prototype"),
@@ -654,6 +669,7 @@ class DashboardServer:
             "mode": mode,
             "clarity": max(35, min(100, clarity)),
             "notes": _clean(notes, 600, ""),
+            "components": clean_components,
             "created_at": int(time.time()),
         }
         self._holo_projects.append(project)
@@ -1018,9 +1034,15 @@ class DashboardServer:
                     name=body.get("name", ""),
                     clarity=body.get("clarity", 85),
                     notes=body.get("notes", ""),
+                    components=body.get("components"),
                 )
             except ValueError as exc:
                 return JSONResponse({"ok": False, "error": str(exc)}, status_code=400)
+            if self._holo_callback:
+                try:
+                    self._holo_callback(project)
+                except Exception as exc:
+                    print(f"[Dashboard] Holo PC callback failed: {exc}")
             await self.broadcast({"type": "holo_project", "project": project})
             return JSONResponse({"ok": True, "project": project})
 

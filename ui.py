@@ -33,7 +33,7 @@ from PyQt6.QtGui import (
     QPen, QPixmap, QRadialGradient, QShortcut,
 )
 from PyQt6.QtWidgets import (
-    QApplication, QFileDialog, QFrame, QHBoxLayout, QLabel, QLineEdit,
+    QApplication, QFileDialog, QComboBox, QFrame, QHBoxLayout, QLabel, QLineEdit,
     QMainWindow, QPushButton, QScrollArea, QSizePolicy, QSplitter,
     QStackedWidget, QTextEdit, QVBoxLayout, QWidget, QProgressBar,
 )
@@ -1132,6 +1132,429 @@ class _CameraPreview(QWidget):
         self._timer.start(6_000)   # auto-dismiss after 6 s
 
 
+class HoloBlueprintCanvas(QWidget):
+    """Animated PC-side hologram and blueprint renderer.
+
+    It is deliberately vector based: the assistant can redraw a safe concept
+    immediately from a structured project instead of pretending that a real
+    free-space hologram or hardware device exists.
+    """
+
+    _ALIASES = {
+        "smart glasses": "glasses", "camera glasses": "glasses", "glass": "glasses",
+        "ар очки": "glasses", "очки": "glasses", "перчатка": "glove", "костюм": "suit",
+    }
+    _DEFAULT_PARTS = {
+        "glasses": ["OPTICAL CAMERA", "HUD LENS", "EDGE SENSOR", "TEMPLE COMPUTE + BATTERY"],
+        "glove": ["PALM DISPLAY", "FINGER SENSORS", "WRIST CAMERA", "REMOVABLE POWER MODULE"],
+        "suit": ["CHEST SENSOR CORE", "HEAD OPTICS", "MOTION SENSORS", "SERVICE PORT"],
+    }
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setMinimumSize(430, 360)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        self._project: dict = {}
+        self._phase = 0.0
+        self._timer = QTimer(self)
+        self._timer.setInterval(45)
+        self._timer.timeout.connect(self._tick)
+        self._timer.start()
+        self.set_project({})
+
+    def _tick(self):
+        self._phase = (self._phase + 0.035) % (math.tau)
+        self.update()
+
+    @classmethod
+    def _model_key(cls, value: str) -> str:
+        raw = str(value or "glasses").lower().strip()
+        raw = cls._ALIASES.get(raw, raw)
+        return raw if raw in ("glasses", "glove", "suit") else "glasses"
+
+    def set_project(self, project: dict | None):
+        project = dict(project or {})
+        model = self._model_key(project.get("model"))
+        mode = str(project.get("mode") or "holo").lower().strip()
+        if mode not in ("holo", "wireframe", "exploded", "clear"):
+            mode = "holo"
+        components = project.get("components")
+        if not isinstance(components, (list, tuple)) or not components:
+            components = self._DEFAULT_PARTS[model]
+        components = [str(x).strip()[:38] for x in components[:12] if str(x).strip()]
+        self._project = {
+            "id": str(project.get("id") or "PC-HOLO"),
+            "name": str(project.get("name") or "Untitled wearable prototype")[:64],
+            "model": model,
+            "mode": mode,
+            "clarity": max(35, min(100, int(project.get("clarity") or 85))),
+            "notes": str(project.get("notes") or "")[:600],
+            "components": components or list(self._DEFAULT_PARTS[model]),
+        }
+        self.update()
+
+    def project(self) -> dict:
+        return dict(self._project)
+
+    def _palette(self):
+        mode = self._project.get("mode", "holo")
+        if mode == "clear":
+            return QColor(C.GREEN), qcol(C.GREEN, 40), QColor(C.ACC2)
+        return QColor(C.PRI), qcol(C.PRI, 34), QColor(C.ACC)
+
+    def _grid(self, p: QPainter, w: int, h: int):
+        p.fillRect(0, 0, w, h, qcol("#00080f"))
+        p.setPen(QPen(qcol(C.PRI, 24), 1))
+        step = 28
+        for x in range(0, w, step):
+            p.drawLine(x, 0, x, h)
+        for y in range(0, h, step):
+            p.drawLine(0, y, w, y)
+        # perspective floor / coordinate axes
+        p.setPen(QPen(qcol(C.PRI, 48), 1))
+        horizon = int(h * 0.68)
+        for i in range(-8, 9):
+            p.drawLine(w // 2, horizon, w // 2 + i * 80, h)
+        p.drawLine(0, horizon, w, horizon)
+        p.setPen(QPen(qcol(C.PRI, 100), 1))
+        p.drawLine(w // 2, 20, w // 2, h - 20)
+        p.drawLine(20, int(h * 0.46), w - 20, int(h * 0.46))
+
+    def _text(self, p: QPainter, text: str, x: float, y: float,
+              size: int = 8, color: str = C.TEXT_DIM, bold: bool = False):
+        p.setFont(QFont("Courier New", size, QFont.Weight.Bold if bold else QFont.Weight.Normal))
+        p.setPen(QPen(QColor(color)))
+        p.drawText(QPointF(x, y), str(text))
+
+    def _ring(self, p: QPainter, cx: float, cy: float, r: float,
+              color: QColor, dashed: bool = False):
+        pen = QPen(color, 1.0)
+        if dashed:
+            pen.setStyle(Qt.PenStyle.DashLine)
+        p.setPen(pen)
+        p.setBrush(Qt.BrushStyle.NoBrush)
+        p.drawEllipse(QPointF(cx, cy), r, r * 0.34)
+
+    def _leader(self, p: QPainter, x1: float, y1: float, x2: float, y2: float,
+                label: str, color: QColor):
+        p.setPen(QPen(color, 1))
+        p.drawLine(QPointF(x1, y1), QPointF(x2, y2))
+        p.drawEllipse(QPointF(x1, y1), 2.2, 2.2)
+        self._text(p, label, x2 + 5, y2 + 3, 7, color.name(), True)
+
+    def _draw_glasses(self, p: QPainter, cx: float, cy: float, s: float,
+                      accent: QColor, fill: QColor):
+        exploded = self._project.get("mode") == "exploded"
+        wire = self._project.get("mode") == "wireframe"
+        dx = 46 * s if exploded else 0
+        dy = -28 * s if exploded else 0
+        left = QRectF(cx - 176 * s - dx, cy - 42 * s, 132 * s, 82 * s)
+        right = QRectF(cx + 44 * s + dx, cy - 42 * s, 132 * s, 82 * s)
+        pen = QPen(accent, 2.2)
+        p.setPen(pen)
+        p.setBrush(Qt.BrushStyle.NoBrush if wire else QBrush(fill))
+        p.drawRoundedRect(left, 20 * s, 20 * s)
+        p.drawRoundedRect(right, 20 * s, 20 * s)
+        p.drawLine(QPointF(left.right(), cy - 2 * s), QPointF(right.left(), cy - 2 * s))
+        p.drawLine(QPointF(left.left(), cy - 8 * s), QPointF(cx - 238 * s, cy - 30 * s))
+        p.drawLine(QPointF(right.right(), cy - 8 * s), QPointF(cx + 238 * s, cy - 30 * s))
+        # HUD projection strips inside both lenses
+        p.setPen(QPen(qcol(C.WHITE, 210), 1.2))
+        p.drawLine(QPointF(left.left() + 16 * s, cy + 17 * s),
+                   QPointF(left.right() - 20 * s, cy + 17 * s))
+        p.drawLine(QPointF(right.left() + 20 * s, cy + 17 * s),
+                   QPointF(right.right() - 16 * s, cy + 17 * s))
+        p.setPen(QPen(QColor(C.ACC2), 2))
+        camera_x = cx + 208 * s + (72 * s if exploded else 0)
+        camera_y = cy - 49 * s + (dy if exploded else 0)
+        p.setBrush(QBrush(QColor(C.ACC)))
+        p.drawEllipse(QPointF(camera_x, camera_y), 11 * s, 11 * s)
+        p.setBrush(QBrush(qcol("#050c12")))
+        p.drawEllipse(QPointF(camera_x, camera_y), 4 * s, 4 * s)
+        p.setBrush(QBrush(QColor(C.ACC2)))
+        p.drawEllipse(QPointF(cx - 198 * s, cy - 31 * s), 4 * s, 4 * s)
+        # moving optical beam
+        p.setPen(QPen(qcol(C.WHITE, 190), 1.3, Qt.PenStyle.DashLine))
+        beam_x = camera_x + 9 * s
+        beam_y = camera_y + 8 * s
+        p.drawLine(QPointF(beam_x, beam_y), QPointF(beam_x + 72 * s, beam_y + 70 * s))
+        pulse = (math.sin(self._phase) + 1.0) * 0.5
+        self._ring(p, cx, cy + 36 * s, (155 + pulse * 18) * s, qcol(accent.name(), 90))
+        self._ring(p, cx, cy + 36 * s, 118 * s, qcol(accent.name(), 55), True)
+        self._leader(p, camera_x, camera_y, min(self.width() - 150, camera_x + 70 * s), camera_y - 34 * s, "CAMERA / FOV", QColor(C.ACC))
+        self._leader(p, left.left() + 10 * s, cy + 38 * s, max(16, left.left() - 86 * s), cy + 78 * s, "HUD LENS", accent)
+        self._text(p, "SMART OPTICS", cx - 52 * s, cy + 126 * s, 10, accent.name(), True)
+        self._text(p, "CAMERA + AR DISPLAY / BLUEPRINT", cx - 120 * s, cy + 144 * s, 7, C.TEXT_DIM)
+
+    def _draw_glove(self, p: QPainter, cx: float, cy: float, s: float,
+                    accent: QColor, fill: QColor):
+        exploded = self._project.get("mode") == "exploded"
+        wire = self._project.get("mode") == "wireframe"
+        palm = QRectF(cx - 55 * s, cy - 12 * s + (24 * s if exploded else 0), 112 * s, 130 * s)
+        p.setPen(QPen(accent, 2.2))
+        p.setBrush(Qt.BrushStyle.NoBrush if wire else QBrush(fill))
+        p.drawRoundedRect(palm, 22 * s, 22 * s)
+        for i, x in enumerate((-43, -19, 6, 30)):
+            top = cy - (122 - (i % 2) * 10) * s - (28 * s if exploded else 0)
+            p.drawRoundedRect(QRectF(cx + x * s, top, 22 * s, 105 * s), 10 * s, 10 * s)
+            p.setBrush(QBrush(QColor(C.ACC2)))
+            p.drawEllipse(QPointF(cx + (x + 11) * s, top + 10 * s), 4 * s, 4 * s)
+            p.setBrush(Qt.BrushStyle.NoBrush if wire else QBrush(fill))
+        p.setPen(QPen(QColor(C.WHITE), 1.2))
+        p.drawRoundedRect(QRectF(cx - 33 * s, cy + 20 * s, 68 * s, 48 * s), 8 * s, 8 * s)
+        p.drawLine(QPointF(cx - 20 * s, cy + 38 * s), QPointF(cx + 18 * s, cy + 38 * s))
+        p.drawLine(QPointF(cx - 20 * s, cy + 50 * s), QPointF(cx + 8 * s, cy + 50 * s))
+        p.setBrush(QBrush(QColor(C.ACC)))
+        p.drawEllipse(QPointF(cx + 67 * s, cy + 82 * s), 10 * s, 10 * s)
+        p.setBrush(QBrush(qcol("#050c12")))
+        p.drawEllipse(QPointF(cx + 67 * s, cy + 82 * s), 4 * s, 4 * s)
+        self._ring(p, cx, cy + 36 * s, 146 * s, qcol(accent.name(), 76))
+        self._leader(p, cx + 67 * s, cy + 82 * s, cx + 122 * s, cy + 109 * s, "WRIST CAMERA", QColor(C.ACC))
+        self._leader(p, cx - 35 * s, cy - 95 * s, cx - 164 * s, cy - 132 * s, "FINGER SENSORS", QColor(C.ACC2))
+        self._text(p, "AR GLOVE", cx - 42 * s, cy + 160 * s, 10, accent.name(), True)
+        self._text(p, "GESTURE INTERFACE / BLUEPRINT", cx - 111 * s, cy + 178 * s, 7, C.TEXT_DIM)
+
+    def _draw_suit(self, p: QPainter, cx: float, cy: float, s: float,
+                   accent: QColor, fill: QColor):
+        exploded = self._project.get("mode") == "exploded"
+        wire = self._project.get("mode") == "wireframe"
+        head_y = cy - 130 * s - (28 * s if exploded else 0)
+        torso = QPainterPath()
+        torso.moveTo(QPointF(cx - 74 * s, cy - 84 * s))
+        torso.lineTo(QPointF(cx - 138 * s, cy - 18 * s))
+        torso.lineTo(QPointF(cx - 102 * s, cy + 13 * s))
+        torso.lineTo(QPointF(cx - 76 * s, cy - 10 * s))
+        torso.lineTo(QPointF(cx - 85 * s, cy + 150 * s))
+        torso.lineTo(QPointF(cx + 85 * s, cy + 150 * s))
+        torso.lineTo(QPointF(cx + 76 * s, cy - 10 * s))
+        torso.lineTo(QPointF(cx + 102 * s, cy + 13 * s))
+        torso.lineTo(QPointF(cx + 138 * s, cy - 18 * s))
+        torso.lineTo(QPointF(cx + 74 * s, cy - 84 * s))
+        torso.closeSubpath()
+        p.setPen(QPen(accent, 2.2))
+        p.setBrush(Qt.BrushStyle.NoBrush if wire else QBrush(fill))
+        p.drawPath(torso)
+        p.setBrush(Qt.BrushStyle.NoBrush if wire else QBrush(qcol(C.PRI, 24)))
+        p.drawEllipse(QPointF(cx, cy - 8 * s), 34 * s, 34 * s)
+        p.setPen(QPen(QColor(C.WHITE), 1.5))
+        p.drawEllipse(QPointF(cx, cy - 8 * s), 17 * s, 17 * s)
+        p.setPen(QPen(QColor(C.ACC2), 1.2))
+        for x, y in ((-67, -4), (67, -4), (-67, 72), (67, 72)):
+            p.setBrush(QBrush(QColor(C.ACC2)))
+            p.drawEllipse(QPointF(cx + x * s, cy + y * s), 6 * s, 6 * s)
+        p.setPen(QPen(QColor(C.ACC), 2))
+        p.setBrush(QBrush(QColor(C.ACC)))
+        p.drawRoundedRect(QRectF(cx - 12 * s, head_y - 12 * s, 24 * s, 14 * s), 5 * s, 5 * s)
+        p.setBrush(QBrush(qcol("#050c12")))
+        p.drawEllipse(QPointF(cx, head_y - 5 * s), 4 * s, 4 * s)
+        self._ring(p, cx, cy - 8 * s, 142 * s, qcol(accent.name(), 75))
+        self._leader(p, cx, cy - 8 * s, cx - 174 * s, cy - 69 * s, "CHEST SENSOR CORE", accent)
+        self._leader(p, cx, head_y - 5 * s, cx + 96 * s, head_y - 37 * s, "HEAD OPTICS", QColor(C.ACC))
+        self._text(p, "FIELD SUIT", cx - 42 * s, cy + 185 * s, 10, accent.name(), True)
+        self._text(p, "SENSOR CORE / BLUEPRINT", cx - 86 * s, cy + 203 * s, 7, C.TEXT_DIM)
+
+    def paintEvent(self, _event):
+        w, h = self.width(), self.height()
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        try:
+            self._grid(p, w, h)
+            accent, fill, hot = self._palette()
+            self._text(p, "PC HOLO OUTPUT  //  AI-GENERATED BLUEPRINT", 16, 22, 8, accent.name(), True)
+            self._text(p, f"ID {self._project.get('id', 'PC-HOLO')}", max(16, w - 132), 22, 7, C.TEXT_DIM)
+            self._text(p, f"MODE {str(self._project.get('mode', 'holo')).upper()}", 16, 40, 7, C.TEXT_DIM)
+            self._text(p, f"CLARITY {self._project.get('clarity', 85)}%", max(16, w - 106), 40, 7, C.TEXT_DIM)
+            cx, cy = w * 0.48, h * 0.43
+            s = max(0.45, min(1.05, min(w / 650.0, h / 430.0)))
+            model = self._project.get("model", "glasses")
+            if model == "glove":
+                self._draw_glove(p, cx, cy, s, accent, fill)
+            elif model == "suit":
+                self._draw_suit(p, cx, cy, s, accent, fill)
+            else:
+                self._draw_glasses(p, cx, cy, s, accent, fill)
+            # AI's component list is the lower blueprint strip.
+            y = h - min(112, max(88, len(self._project.get("components", [])) * 15 + 34))
+            p.setPen(QPen(qcol(accent.name(), 110), 1))
+            p.drawLine(16, y - 10, w - 16, y - 10)
+            self._text(p, "AI COMPONENT SCHEDULE", 16, y + 4, 7, hot.name(), True)
+            for i, component in enumerate(self._project.get("components", [])[:6]):
+                self._text(p, f"{i + 1:02d}  {component}", 18, y + 20 + i * 14, 7, C.TEXT_MED)
+            if self._project.get("notes"):
+                note = " ".join(str(self._project["notes"]).split())[:74]
+                self._text(p, "BRIEF  " + note, max(18, w * 0.48), y + 20, 7, C.TEXT_DIM)
+            sweep_y = 56 + ((math.sin(self._phase) + 1) * 0.5) * max(80, h * 0.54)
+            p.setPen(QPen(qcol(C.WHITE, 80), 1))
+            p.drawLine(12, sweep_y, w - 12, sweep_y)
+        finally:
+            p.end()
+
+
+class HoloLabOverlay(QWidget):
+    """PC monitor surface for AI-generated wearable blueprints."""
+
+    closed = pyqtSignal()
+    _OW, _OH = 900, 610
+
+    _MODELS = (
+        ("SMART OPTICS / CAMERA GLASSES", "glasses"),
+        ("AR GLOVE / GESTURE INTERFACE", "glove"),
+        ("FIELD SUIT / SENSOR CORE", "suit"),
+    )
+    _MODES = (("HOLO", "holo"), ("WIREFRAME", "wireframe"),
+              ("EXPLODED / BY PARTS", "exploded"), ("CLEAR VIEW", "clear"))
+    _PARTS = HoloBlueprintCanvas._DEFAULT_PARTS
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        self.setStyleSheet(f"""
+            HoloLabOverlay {{
+                background: rgba(0, 8, 15, 248);
+                border: 1px solid {C.BORDER_B}; border-radius: 7px;
+            }}
+            QComboBox, QLineEdit, QTextEdit {{
+                background: #000d14; color: {C.TEXT};
+                border: 1px solid {C.BORDER}; border-radius: 4px; padding: 5px;
+            }}
+            QComboBox:focus, QLineEdit:focus, QTextEdit:focus {{ border-color: {C.PRI}; }}
+            QComboBox QAbstractItemView {{ background: #00121c; color: {C.TEXT}; selection-background-color: {C.PRI_GHO}; }}
+        """)
+        root = QVBoxLayout(self)
+        root.setContentsMargins(10, 8, 10, 10)
+        root.setSpacing(7)
+
+        header = QHBoxLayout()
+        title = QLabel("◈  HOLO LAB  //  AI BLUEPRINT + HOLOGRAM")
+        title.setFont(QFont("Courier New", 11, QFont.Weight.Bold))
+        title.setStyleSheet(f"color: {C.PRI}; background: transparent;")
+        header.addWidget(title)
+        header.addStretch()
+        self._id_lbl = QLabel("PC-HOLO")
+        self._id_lbl.setFont(QFont("Courier New", 8, QFont.Weight.Bold))
+        self._id_lbl.setStyleSheet(f"color: {C.GREEN}; background: transparent;")
+        header.addWidget(self._id_lbl)
+        close = QPushButton("✕")
+        close.setFixedSize(26, 26)
+        close.setCursor(Qt.CursorShape.PointingHandCursor)
+        close.setStyleSheet(f"color: {C.TEXT_DIM}; background: transparent; border: 1px solid {C.BORDER}; border-radius: 4px;")
+        close.clicked.connect(self._close)
+        header.addWidget(close)
+        root.addLayout(header)
+
+        body = QHBoxLayout()
+        body.setSpacing(8)
+        self._canvas = HoloBlueprintCanvas()
+        body.addWidget(self._canvas, stretch=1)
+
+        panel = QWidget()
+        panel.setFixedWidth(245)
+        panel.setStyleSheet(f"background: {C.PANEL}; border: 1px solid {C.BORDER}; border-radius: 5px;")
+        pl = QVBoxLayout(panel)
+        pl.setContentsMargins(9, 9, 9, 9)
+        pl.setSpacing(6)
+
+        def _lbl(text, color=C.TEXT_DIM, size=7, bold=False):
+            label = QLabel(text)
+            label.setFont(QFont("Courier New", size, QFont.Weight.Bold if bold else QFont.Weight.Normal))
+            label.setStyleSheet(f"color: {color}; background: transparent;")
+            return label
+
+        pl.addWidget(_lbl("AI-GENERATED DESIGN", C.PRI_DIM, 8, True))
+        self._name = QLineEdit("PC wearable prototype")
+        self._name.setFont(QFont("Courier New", 9))
+        self._name.setFixedHeight(29)
+        pl.addWidget(self._name)
+        pl.addWidget(_lbl("PROTOTYPE", C.TEXT_DIM))
+        self._model = QComboBox()
+        for text, key in self._MODELS:
+            self._model.addItem(text, key)
+        self._model.setFixedHeight(29)
+        pl.addWidget(self._model)
+        pl.addWidget(_lbl("DISPLAY / PRESENTATION", C.TEXT_DIM))
+        self._mode = QComboBox()
+        for text, key in self._MODES:
+            self._mode.addItem(text, key)
+        self._mode.setFixedHeight(29)
+        pl.addWidget(self._mode)
+        pl.addWidget(_lbl("DESIGN BRIEF", C.TEXT_DIM))
+        self._notes = QTextEdit()
+        self._notes.setPlaceholderText("What should the device see, measure or show?")
+        self._notes.setFont(QFont("Courier New", 8))
+        self._notes.setMaximumHeight(85)
+        pl.addWidget(self._notes)
+        self._parts_lbl = _lbl("", C.TEXT_MED, 7)
+        self._parts_lbl.setWordWrap(True)
+        self._parts_lbl.setMinimumHeight(100)
+        pl.addWidget(self._parts_lbl)
+        pl.addStretch()
+
+        generate = QPushButton("▸  GENERATE BLUEPRINT")
+        generate.setFixedHeight(32)
+        generate.setFont(QFont("Courier New", 8, QFont.Weight.Bold))
+        generate.setCursor(Qt.CursorShape.PointingHandCursor)
+        generate.setStyleSheet(f"""
+            QPushButton {{ background: {C.PRI}; color: #001018; border: none; border-radius: 4px; }}
+            QPushButton:hover {{ background: {C.WHITE}; }}
+        """)
+        generate.clicked.connect(self._generate_local)
+        pl.addWidget(generate)
+        self._status = _lbl("READY / waiting for AI or manual design", C.GREEN, 7, True)
+        self._status.setWordWrap(True)
+        pl.addWidget(self._status)
+        body.addWidget(panel)
+        root.addLayout(body, stretch=1)
+
+        foot = QLabel("SAFE PC PREVIEW  ·  Vector blueprint only  ·  No hardware or weapon systems are activated")
+        foot.setFont(QFont("Courier New", 7))
+        foot.setStyleSheet(f"color: {C.TEXT_DIM}; background: transparent;")
+        root.addWidget(foot)
+        self.set_project({})
+
+    def _close(self):
+        self.hide()
+        self.closed.emit()
+
+    def _generate_local(self):
+        model = self._model.currentData() or "glasses"
+        mode = self._mode.currentData() or "holo"
+        self.set_project({
+            "id": "PC-" + time.strftime("%H%M%S"),
+            "name": self._name.text().strip() or "PC wearable prototype",
+            "model": model,
+            "mode": mode,
+            "clarity": 90,
+            "notes": self._notes.toPlainText().strip(),
+            "components": list(self._PARTS[model]),
+        })
+        self._status.setText("LOCAL BLUEPRINT GENERATED / READY")
+
+    def set_project(self, project: dict | None):
+        p = dict(project or {})
+        model = HoloBlueprintCanvas._model_key(p.get("model"))
+        mode = str(p.get("mode") or "holo").lower().strip()
+        model_idx = self._model.findData(model)
+        mode_idx = self._mode.findData(mode)
+        if model_idx >= 0:
+            self._model.setCurrentIndex(model_idx)
+        if mode_idx >= 0:
+            self._mode.setCurrentIndex(mode_idx)
+        self._name.setText(str(p.get("name") or "PC wearable prototype")[:64])
+        self._notes.setPlainText(str(p.get("notes") or "")[:600])
+        self._canvas.set_project(p)
+        current = self._canvas.project()
+        self._id_lbl.setText(current["id"])
+        items = current.get("components") or []
+        self._parts_lbl.setText("COMPONENTS\n" + "\n".join(f"{i + 1:02d}  {x}" for i, x in enumerate(items[:8])))
+        self._status.setText("AI BLUEPRINT RECEIVED / DRAWING ON PC")
+
+    def keyPressEvent(self, event):
+        if event.key() == Qt.Key.Key_Escape:
+            self._close()
+        else:
+            super().keyPressEvent(event)
+
+
 class SetupOverlay(QWidget):
     done = pyqtSignal(str, str)
 
@@ -1957,6 +2380,7 @@ class MainWindow(QMainWindow):
     _content_sig    = pyqtSignal(str, str)   # (title, text) — thread-safe content display
     _reconfig_sig   = pyqtSignal()           # trigger setup overlay from any thread
     _camera_sig     = pyqtSignal(bytes)      # show camera frame preview (small overlay)
+    _holo_sig       = pyqtSignal(object)     # AI-generated blueprint → PC Holo Lab
     _cam_stream_sig = pyqtSignal(bool)       # True=start live stream, False=stop
     _cam_frame_sig  = pyqtSignal(bytes)      # live camera frame → HUD area
     _scan_sig       = pyqtSignal(bytes, object)  # phone scan frame + detections → HUD area
@@ -1996,6 +2420,7 @@ class MainWindow(QMainWindow):
         self._current_file: str | None = None
         self._remote_overlay: RemoteKeyOverlay | None = None
         self._customize_overlay: CustomizeOverlay | None = None
+        self._holo_overlay: HoloLabOverlay | None = None
 
         central = QWidget()
         central.setStyleSheet(f"background: {C.BG};")
@@ -2104,6 +2529,7 @@ class MainWindow(QMainWindow):
         self._content_sig.connect(self._show_content)
         self._reconfig_sig.connect(self._show_setup)
         self._camera_sig.connect(self._show_camera_frame)
+        self._holo_sig.connect(self._show_holo_project)
         self._cam_stream_sig.connect(self._on_cam_stream)
         self._cam_frame_sig.connect(self._on_cam_frame)
         self._scan_sig.connect(self._on_phone_scan)
@@ -3118,6 +3544,15 @@ class MainWindow(QMainWindow):
                 (cw.height() - oh) // 2,
                 ow, oh,
             )
+        if self._holo_overlay and self._holo_overlay.isVisible():
+            margin = 24
+            ow = min(HoloLabOverlay._OW, max(620, cw.width() - margin * 2))
+            oh = min(HoloLabOverlay._OH, max(430, cw.height() - margin * 2))
+            self._holo_overlay.setGeometry(
+                (cw.width() - ow) // 2,
+                (cw.height() - oh) // 2,
+                ow, oh,
+            )
         # Camera preview — bottom-right corner
         pw = _CameraPreview._W
         ph = self._cam_preview.height() or _CameraPreview._H
@@ -3501,6 +3936,14 @@ class MainWindow(QMainWindow):
         remote_btn.clicked.connect(self._open_remote)
         lay.addWidget(remote_btn)
 
+        holo_pc_btn = QPushButton("◈  HOLO LAB / PC MONITOR")
+        holo_pc_btn.setFixedHeight(32)
+        holo_pc_btn.setFont(QFont("Courier New", 8, QFont.Weight.Bold))
+        holo_pc_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        holo_pc_btn.setStyleSheet(_BTN_STYLE_PRI)
+        holo_pc_btn.clicked.connect(self._open_holo_pc)
+        lay.addWidget(holo_pc_btn)
+
         fs_btn = QPushButton("\u26f6  FULLSCREEN  [F11]")
         fs_btn.setFixedHeight(28)
         fs_btn.setFont(QFont("Courier New", 7))
@@ -3848,6 +4291,42 @@ class MainWindow(QMainWindow):
     def notify_phone_connected(self) -> None:
         if self._remote_overlay and self._remote_overlay.isVisible():
             self._remote_overlay.mark_connected()
+
+    def _open_holo_pc(self):
+        """Open a PC-only Holo Lab with a starter concept."""
+        self._show_holo_project({
+            "id": "PC-HOLO",
+            "name": "Smart Optics / PC prototype",
+            "model": "glasses",
+            "mode": "holo",
+            "clarity": 90,
+            "notes": "Camera input, transparent HUD lens, motion sensor and removable compute/power module.",
+            "components": list(HoloBlueprintCanvas._DEFAULT_PARTS["glasses"]),
+        })
+
+    def _show_holo_project(self, project=None):
+        """Render an AI-generated blueprint and hologram on the PC monitor."""
+        if hasattr(self, "_quick_drawer") and self._quick_drawer.isVisible():
+            self._toggle_drawer(False)
+        cw = self.centralWidget()
+        if self._holo_overlay is None:
+            ov = HoloLabOverlay(parent=cw)
+            ov.closed.connect(lambda: setattr(self, '_holo_overlay', None))
+            self._holo_overlay = ov
+        self._holo_overlay.set_project(project or {})
+        margin = 24
+        ow = min(HoloLabOverlay._OW, max(620, cw.width() - margin * 2))
+        oh = min(HoloLabOverlay._OH, max(430, cw.height() - margin * 2))
+        self._holo_overlay.setGeometry(
+            (cw.width() - ow) // 2,
+            (cw.height() - oh) // 2,
+            ow, oh,
+        )
+        self._holo_overlay.show()
+        self._holo_overlay.raise_()
+        self._log.append_log(
+            f"SYS: Holo blueprint rendered on PC — {self._holo_overlay._canvas.project().get('id', 'PC-HOLO')}"
+        )
 
     def _open_remote(self):
         if not self.on_remote_clicked:
@@ -4396,6 +4875,10 @@ class JarvisUI:
     def show_content(self, title: str, text: str):
         """Thread-safe: display content in the panel below the HUD."""
         self._win._content_sig.emit(title[:48], text[:4000])
+
+    def show_holo_project(self, project: dict | None = None):
+        """Thread-safe: show an AI-generated wearable blueprint on the PC."""
+        self._win._holo_sig.emit(project or {})
 
     def prompt_reconfig(self):
         """Thread-safe: show the API key setup overlay (e.g. after an auth error)."""
