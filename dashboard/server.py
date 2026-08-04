@@ -565,6 +565,10 @@ class DashboardServer:
         self._phone_cam_queue: asyncio.Queue      = asyncio.Queue(maxsize=2)  # live stream → PC HUD
         self._cam_stream_active: bool             = False
         self._audio_out_queue: asyncio.Queue      = asyncio.Queue(maxsize=400)  # JARVIS voice → phones
+        # Holo Lab projects are intentionally session-scoped: a design is a
+        # visual prototype, not a claim that a physical hologram or wearable
+        # has been manufactured.
+        self._holo_projects: list[dict]            = []
         self._uploads_dir                 = UPLOADS_DIR
         self._login_html                  = _read("login.html")
         self._app_html                    = _read("app.html")
@@ -615,6 +619,46 @@ class DashboardServer:
 
     def set_connect_callback(self, fn) -> None:
         self._connect_callback = fn
+
+    def create_holo_project(
+        self,
+        model: str = "glasses",
+        mode: str = "holo",
+        name: str = "",
+        clarity: int = 85,
+        notes: str = "",
+    ) -> dict:
+        """Create one sanitized, session-scoped visual wearable prototype."""
+        allowed_models = {"glasses", "glove", "suit"}
+        allowed_modes = {"holo", "wireframe", "exploded", "clear"}
+        model = str(model or "glasses").lower().strip()
+        mode = str(mode or "holo").lower().strip()
+        if model not in allowed_models:
+            raise ValueError("Unknown prototype")
+        if mode not in allowed_modes:
+            raise ValueError("Unknown display mode")
+
+        def _clean(value, limit: int, fallback: str) -> str:
+            text = re.sub(r"[\x00-\x1f\x7f]", " ", str(value or ""))
+            text = re.sub(r"\s+", " ", text).strip()
+            return text[:limit] or fallback
+
+        try:
+            clarity = int(clarity)
+        except (TypeError, ValueError):
+            clarity = 85
+        project = {
+            "id": "HOLO-" + secrets.token_hex(3).upper(),
+            "name": _clean(name, 64, "Untitled wearable prototype"),
+            "model": model,
+            "mode": mode,
+            "clarity": max(35, min(100, clarity)),
+            "notes": _clean(notes, 600, ""),
+            "created_at": int(time.time()),
+        }
+        self._holo_projects.append(project)
+        self._holo_projects = self._holo_projects[-20:]
+        return project
 
     # ── JARVIS voice → phones ─────────────────────────────────────────────
 
@@ -947,6 +991,45 @@ class DashboardServer:
                     msg = msg[:200]
                 return JSONResponse({"ok": False, "error": msg}, status_code=502)
             return JSONResponse({"ok": True, "detections": detections})
+
+        # ── Holo Lab — safe wearable prototype records ───────────────────────
+
+        @app.post("/api/holo-project")
+        async def create_holo_project(req: Request):
+            """Create a session-scoped visual prototype for the Holo Lab.
+
+            The endpoint deliberately stores only a small, sanitized design
+            record. It does not drive hardware, transmit camera data, or
+            pretend to manufacture a physical hologram.
+            """
+            if not _auth(req):
+                return JSONResponse({"ok": False, "error": "Unauthorized"}, status_code=401)
+            try:
+                body = await req.json()
+            except Exception:
+                return JSONResponse({"ok": False, "error": "Bad JSON"}, status_code=400)
+            if not isinstance(body, dict):
+                return JSONResponse({"ok": False, "error": "JSON object required"}, status_code=400)
+
+            try:
+                project = self.create_holo_project(
+                    model=body.get("model", "glasses"),
+                    mode=body.get("mode", "holo"),
+                    name=body.get("name", ""),
+                    clarity=body.get("clarity", 85),
+                    notes=body.get("notes", ""),
+                )
+            except ValueError as exc:
+                return JSONResponse({"ok": False, "error": str(exc)}, status_code=400)
+            await self.broadcast({"type": "holo_project", "project": project})
+            return JSONResponse({"ok": True, "project": project})
+
+        @app.get("/api/holo-projects")
+        async def list_holo_projects(req: Request):
+            """Return prototypes created during this dashboard session."""
+            if not _auth(req):
+                return JSONResponse({"ok": False, "error": "Unauthorized"}, status_code=401)
+            return JSONResponse({"ok": True, "projects": list(self._holo_projects)})
 
         # ── Phone camera live stream → PC HUD ─────────────────────────────────
 

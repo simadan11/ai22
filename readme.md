@@ -46,6 +46,7 @@ It's not just an assistant — it's an extension of your digital life.
 | 🧑‍💻 Silent Language Memory | Detects spoken language on first use — all future sessions adapt automatically |
 | 📱 Remote Dashboard | Control the assistant from your phone via QR code pairing |
 | 📷 Phone Camera Vision | EDITH-style scan from the phone camera — labels people, cars & plates on a live HUD, JARVIS answers by voice on PC **and** phone |
+| ◈ Holo Lab | Create a session-scoped holographic wearable prototype — smart glasses with camera, AR glove, or sensor suit; inspect it in HOLO / WIREFRAME / EXPLODED / CLEAR VIEW modes |
 | ⚡ Auto-Start on Boot | Registers with the OS startup system (registry / LaunchAgent / .desktop) |
 | 📋 Clipboard Intelligence | Copy any text → floating panel with Translate / Summarise / Explain / Fix |
 | 🎨 Assistant Customization | Change the assistant name and your name from the UI — takes effect immediately |
@@ -72,6 +73,18 @@ The Remote Dashboard now turns your phone into JARVIS's eyes, Spider-Man style:
 > 🔊 **Voice notes:** JARVIS speaks on PC and phone simultaneously; if both are in the same room and you hear an echo, tap 🔇 on the phone or use headphones. While JARVIS's voice plays on the phone speaker, the phone mic is briefly suppressed so JARVIS never hears himself (that echo is what used to interrupt answers).
 
 > ⚠️ **Privacy by design:** people are described by appearance/clothing/pose only — the AI never identifies real people and never looks anyone up. License plates are transcribed as visible text only; there is intentionally **no owner lookup**. Camera access on `http://` origins needs the same one-time Chrome flag as the microphone (the app shows setup instructions automatically on first tap).
+
+## ◈ Holo Lab — wearable / smart-glasses prototype
+
+Open **◈ HOLO** in the Remote Dashboard to get a software holographic workbench inspired by sci-fi HUDs:
+
+1. Choose **Smart Optics** (glasses + camera), **AR Glove**, or **Field Suit**.
+2. Enter a project name and notes, then press **CREATE HOLOGRAM**. The server returns a session project ID such as `HOLO-A1B2C3`.
+3. Inspect the animated concept in **HOLO**, **WIREFRAME**, **EXPLODED**, or **CLEAR VIEW** mode. The component list makes the camera, display, sensors, compute and power areas explicit.
+4. Start the camera feed and press **SCAN SPACE** to reuse the EDITH detector on the test feed. **ASK JARVIS ABOUT VIEW** sends one selected frame to the existing vision session for a spoken explanation.
+5. You can also say or type *"create smart glasses with a camera and show the parts"*. The new `holo_project` tool creates the same project and reports its ID in the main UI.
+
+This is an honest software prototype: it renders a hologram-style visualization on a phone/PC screen and can use a camera, but it cannot create a physical free-space hologram or switch on hardware by itself. Before building any real wearable, validate optics, heat, battery safety, fit, privacy and local regulations.
 
 ---
 

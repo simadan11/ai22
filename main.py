@@ -312,6 +312,29 @@ TOOL_DECLARATIONS = [
         }
     },
     {
+        "name": "holo_project",
+        "description": (
+            "Creates a visual hologram-style wearable prototype in the Holo Lab. "
+            "Use when the user asks to design smart glasses with a camera, an AR glove, "
+            "a sensor suit, or to show a prototype by parts. This is a safe visual design "
+            "record only; it does not manufacture hardware, control weapons, or create a physical hologram."
+        ),
+        "parameters": {
+            "type": "OBJECT",
+            "properties": {
+                "prototype": {
+                    "type": "STRING",
+                    "description": "glasses | glove | suit. Use glasses for smart glasses with a camera."
+                },
+                "project_name": {"type": "STRING", "description": "Short name for the concept"},
+                "display_mode": {"type": "STRING", "description": "holo | wireframe | exploded | clear"},
+                "notes": {"type": "STRING", "description": "What the wearable should see, measure, or display"},
+                "clarity": {"type": "INTEGER", "description": "Visual contrast from 35 to 100"},
+            },
+            "required": ["prototype"]
+        }
+    },
+    {
         "name": "remember_face",
         "description": (
             "Learns the face currently visible on the live phone camera and "
@@ -1039,6 +1062,44 @@ class JarvisLive:
                         f"telling them you are looking at their {_stall} right now. "
                         f"Do NOT describe or guess content — the actual image arrives in the NEXT message."
                     )
+
+            elif name == "holo_project":
+                # Voice/text command → create the same safe visual prototype
+                # that the dashboard's HOLO button creates.
+                if not self._dashboard:
+                    result = "The Holo Lab dashboard is not running yet. Open Remote Control after the dashboard starts."
+                else:
+                    _model_raw = str(args.get("prototype") or "glasses").lower().strip()
+                    _model_aliases = {
+                        "smart glasses": "glasses", "glass": "glasses", "camera glasses": "glasses",
+                        "ар очки": "glasses", "очки": "glasses", "перчатка": "glove", "костюм": "suit",
+                    }
+                    _model = _model_aliases.get(_model_raw, _model_raw)
+                    _mode = str(args.get("display_mode") or "holo").lower().strip()
+                    _mode_aliases = {"clear view": "clear", "по частям": "exploded", "частями": "exploded", "каркас": "wireframe"}
+                    _mode = _mode_aliases.get(_mode, _mode)
+                    try:
+                        project = self._dashboard.create_holo_project(
+                            model=_model,
+                            mode=_mode,
+                            name=args.get("project_name") or "",
+                            clarity=args.get("clarity", 85),
+                            notes=args.get("notes") or "",
+                        )
+                        await self._dashboard.broadcast({"type": "holo_project", "project": project})
+                        self.ui.show_content(
+                            "HOLO LAB — " + project["id"],
+                            f"{project['name']}\n\n"
+                            f"Prototype: {project['model']} · Display: {project['mode']}\n"
+                            "Open the Remote Dashboard and tap ◈ HOLO to inspect the animated concept, "
+                            "components, camera test feed and exploded view."
+                        )
+                        result = (
+                            f"Created visual Holo Lab prototype {project['id']} for {project['model']}. "
+                            "It is ready in the Remote Dashboard; this is a software visualization, not a physical hologram."
+                        )
+                    except ValueError as exc:
+                        result = f"I could not create that prototype: {exc}. Choose glasses, glove, or suit."
 
             elif name == "remember_face":
                 who = (args.get("name") or args.get("person") or "").strip()
