@@ -352,6 +352,11 @@ TOOL_DECLARATIONS = [
                             "y2": {"type": "NUMBER", "description": "line endpoint y"},
                             "z2": {"type": "NUMBER", "description": "line endpoint z"},
                             "rotation": {"type": "NUMBER", "description": "rotation in degrees"},
+                            "scale": {"type": "NUMBER", "description": "visual scale 0.05-10"},
+                            "mm_w": {"type": "NUMBER", "description": "approximate real width in millimeters; verify datasheet"},
+                            "mm_h": {"type": "NUMBER", "description": "approximate real height in millimeters; verify datasheet"},
+                            "mm_d": {"type": "NUMBER", "description": "approximate real depth in millimeters; verify datasheet"},
+                            "part_id": {"type": "STRING", "description": "catalog part ID if this primitive represents a selected part"},
                             "label": {"type": "STRING", "description": "short part label"},
                         },
                         "required": ["type", "x", "y"]

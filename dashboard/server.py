@@ -695,6 +695,11 @@ class DashboardServer:
                     "h": _number(raw.get("h"), 100, 4, 700),
                     "d": _number(raw.get("d"), 70, 0, 500),
                     "rotation": _number(raw.get("rotation"), 0, -180, 180),
+                    "scale": _number(raw.get("scale"), 1, 0.05, 10),
+                    "mm_w": _number(raw.get("mm_w"), 0, 0, 2000),
+                    "mm_h": _number(raw.get("mm_h"), 0, 0, 2000),
+                    "mm_d": _number(raw.get("mm_d"), 0, 0, 2000),
+                    "part_id": normalize_part_ids([raw.get("part_id")])[0] if normalize_part_ids([raw.get("part_id")]) else "",
                     "label": _clean(raw.get("label"), 48, ""),
                 }
                 if kind == "line":

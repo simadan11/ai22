@@ -1148,6 +1148,9 @@ class HoloBlueprintCanvas(QWidget):
     free-space hologram or hardware device exists.
     """
 
+    selection_changed = pyqtSignal(int)
+    scene_changed = pyqtSignal(object)
+
     _ALIASES = {
         "smart glasses": "glasses", "camera glasses": "glasses", "glass": "glasses",
         "ар очки": "glasses", "очки": "glasses", "перчатка": "glove", "костюм": "suit",
@@ -1165,6 +1168,9 @@ class HoloBlueprintCanvas(QWidget):
         self.setMinimumSize(430, 360)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         self._project: dict = {}
+        self._selected_index = -1
+        self._dragging = False
+        self._view_zoom = 1.0
         self._phase = 0.0
         self._timer = QTimer(self)
         self._timer.setInterval(45)
@@ -1201,6 +1207,8 @@ class HoloBlueprintCanvas(QWidget):
             geometry = []
         safe_geometry = [g for g in geometry[:32] if isinstance(g, dict)]
         safe_parts = normalize_part_ids(project.get("parts"))
+        if self._selected_index >= len(safe_geometry):
+            self._selected_index = -1
         self._project = {
             "id": str(project.get("id") or "PC-HOLO"),
             "name": str(project.get("name") or "Untitled hologram prototype")[:64],
@@ -1218,6 +1226,102 @@ class HoloBlueprintCanvas(QWidget):
 
     def project(self) -> dict:
         return dict(self._project)
+
+    def _scene_to_screen(self, item: dict, index: int, count: int,
+                         cx: float, cy: float, scale: float, suffix: str = "") -> QPointF:
+        def number(key, fallback=0.0):
+            try:
+                return float(item.get(key, fallback))
+            except (TypeError, ValueError, AttributeError):
+                return fallback
+        x = number("x" + suffix, 500)
+        y = number("y" + suffix, 500)
+        z = number("z" + suffix, 0)
+        exploded = self._project.get("mode") == "exploded" and not suffix
+        ex = ((index - (count - 1) / 2) * 14) if exploded else 0
+        ey = -(abs(index - count / 2) * 6) if exploded else 0
+        return QPointF(
+            cx + (x - 500) * scale * 0.52 + z * scale * 0.13 + ex,
+            cy + (y - 500) * scale * 0.38 - z * scale * 0.10 + ey,
+        )
+
+    def _screen_to_scene(self, pos: QPointF, index: int) -> tuple[float, float]:
+        w, h = self.width(), self.height()
+        cx, cy = w * 0.48, h * 0.43
+        scale = max(0.45, min(1.05, min(w / 650.0, h / 430.0))) * self._view_zoom
+        geometry = self._project.get("geometry") or []
+        count = max(1, len(geometry))
+        exploded = self._project.get("mode") == "exploded"
+        ex = ((index - (count - 1) / 2) * 14) if exploded else 0
+        ey = -(abs(index - count / 2) * 6) if exploded else 0
+        x = 500 + (pos.x() - cx - ex) / max(0.01, scale * 0.52)
+        y = 500 + (pos.y() - cy - ey) / max(0.01, scale * 0.38)
+        return max(0.0, min(1000.0, x)), max(0.0, min(1000.0, y))
+
+    def set_selected_index(self, index: int):
+        geometry = self._project.get("geometry") or []
+        index = int(index) if 0 <= int(index) < len(geometry) else -1
+        if index != self._selected_index:
+            self._selected_index = index
+            self.selection_changed.emit(index)
+            self.update()
+
+    def selected_index(self) -> int:
+        return self._selected_index
+
+    def wheelEvent(self, event):
+        direction = 1 if event.angleDelta().y() > 0 else -1
+        self._view_zoom = max(0.55, min(1.8, self._view_zoom + direction * 0.08))
+        self.update()
+        event.accept()
+
+    def mousePressEvent(self, event):
+        if event.button() != Qt.MouseButton.LeftButton:
+            return super().mousePressEvent(event)
+        geometry = self._project.get("geometry") or []
+        if not geometry:
+            self.set_selected_index(-1)
+            return
+        w, h = self.width(), self.height()
+        cx, cy = w * 0.48, h * 0.43
+        scale = max(0.45, min(1.05, min(w / 650.0, h / 430.0))) * self._view_zoom
+        nearest, distance = -1, float("inf")
+        for index, item in enumerate(geometry):
+            if not isinstance(item, dict):
+                continue
+            point = self._scene_to_screen(item, index, len(geometry), cx, cy, scale)
+            d = math.hypot(point.x() - event.position().x(), point.y() - event.position().y())
+            if d < distance:
+                nearest, distance = index, d
+        if nearest >= 0:
+            candidate = geometry[nearest] if nearest < len(geometry) else {}
+            try:
+                hit_radius = max(36.0, max(float(candidate.get("w", 100)) * scale * .28, float(candidate.get("h", 100)) * scale * .22))
+            except (TypeError, ValueError, AttributeError):
+                hit_radius = max(30.0, 42.0 * scale)
+        else:
+            hit_radius = 0
+        if nearest >= 0 and distance <= hit_radius:
+            self.set_selected_index(nearest)
+            self._dragging = True
+        else:
+            self.set_selected_index(-1)
+
+    def mouseMoveEvent(self, event):
+        if not self._dragging or not (event.buttons() & Qt.MouseButton.LeftButton):
+            return super().mouseMoveEvent(event)
+        geometry = self._project.get("geometry") or []
+        index = self._selected_index
+        if 0 <= index < len(geometry) and isinstance(geometry[index], dict):
+            x, y = self._screen_to_scene(event.position(), index)
+            geometry[index]["x"], geometry[index]["y"] = round(x, 1), round(y, 1)
+            self.scene_changed.emit(self.project())
+            self.update()
+
+    def mouseReleaseEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton:
+            self._dragging = False
+        return super().mouseReleaseEvent(event)
 
     def _palette(self):
         mode = self._project.get("mode", "holo")
@@ -1412,9 +1516,10 @@ class HoloBlueprintCanvas(QWidget):
             kind = str(item.get("type") or "box").lower()
             center = point(item)
             px, py = center.x(), center.y()
-            ww = max(4.0, number(item, "w", 140) * s * 0.52)
-            hh = max(4.0, number(item, "h", 100) * s * 0.38)
-            dd = max(0.0, number(item, "d", 70) * s * 0.16)
+            visual_scale = max(0.05, min(10.0, number(item, "scale", 1)))
+            ww = max(4.0, number(item, "w", 140) * s * 0.52 * visual_scale)
+            hh = max(4.0, number(item, "h", 100) * s * 0.38 * visual_scale)
+            dd = max(0.0, number(item, "d", 70) * s * 0.16 * visual_scale)
             rotation = number(item, "rotation", 0)
             p.save()
             p.translate(px, py)
@@ -1461,6 +1566,11 @@ class HoloBlueprintCanvas(QWidget):
                 p.setBrush(QBrush(QColor(C.ACC2)))
                 p.drawEllipse(QPointF(0, 0), 5 * s, 5 * s)
             p.restore()
+            if index == self._selected_index:
+                p.setPen(QPen(QColor(C.WHITE), 1.2, Qt.PenStyle.DashLine))
+                p.setBrush(Qt.BrushStyle.NoBrush)
+                p.drawEllipse(QPointF(px, py), max(12, ww * .62), max(12, hh * .62))
+                self._text(p, "SELECTED / DRAG TO PLACE", px + 10, py + hh * .72, 7, C.WHITE, True)
             label = str(item.get("label") or "").strip()[:38]
             if label:
                 self._leader(p, px, py, min(self.width() - 150, px + 56 * s), py - 24 * s, label, accent)
@@ -1486,7 +1596,7 @@ class HoloBlueprintCanvas(QWidget):
                 self._text(p, "SUBJECT " + subject.upper()[:52], 16, 56, 7, C.TEXT_MED)
             self._text(p, f"CLARITY {self._project.get('clarity', 85)}%", max(16, w - 106), 40, 7, C.TEXT_DIM)
             cx, cy = w * 0.48, h * 0.43
-            s = max(0.45, min(1.05, min(w / 650.0, h / 430.0)))
+            s = max(0.45, min(1.05, min(w / 650.0, h / 430.0))) * self._view_zoom
             model = self._project.get("model", "glasses")
             if model == "glove":
                 self._draw_glove(p, cx, cy, s, accent, fill)
@@ -1569,6 +1679,8 @@ class HoloLabOverlay(QWidget):
         body = QHBoxLayout()
         body.setSpacing(8)
         self._canvas = HoloBlueprintCanvas()
+        self._canvas.selection_changed.connect(self._on_scene_selection)
+        self._canvas.scene_changed.connect(self._on_scene_changed)
         body.addWidget(self._canvas, stretch=1)
 
         panel = QWidget()
@@ -1625,6 +1737,13 @@ class HoloLabOverlay(QWidget):
         parts_btn.setStyleSheet(f"background: {C.PANEL2}; color: {C.TEXT_MED}; border: 1px solid {C.BORDER}; border-radius: 4px;")
         parts_btn.clicked.connect(self._open_parts_catalog)
         pl.addWidget(parts_btn)
+        assembly_btn = QPushButton("▦  ASSEMBLY EDITOR / PLACE PARTS")
+        assembly_btn.setFixedHeight(27)
+        assembly_btn.setFont(QFont("Courier New", 7, QFont.Weight.Bold))
+        assembly_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        assembly_btn.setStyleSheet(f"background: {C.PANEL2}; color: {C.PRI}; border: 1px solid {C.BORDER}; border-radius: 4px;")
+        assembly_btn.clicked.connect(self._open_assembly_editor)
+        pl.addWidget(assembly_btn)
         diag_btn = QPushButton("⚠  RUN DIAGNOSTICS / HELP")
         diag_btn.setFixedHeight(27)
         diag_btn.setFont(QFont("Courier New", 7, QFont.Weight.Bold))
@@ -1639,6 +1758,18 @@ class HoloLabOverlay(QWidget):
         print_btn.setStyleSheet(f"background: {C.PANEL2}; color: {C.GREEN}; border: 1px solid {C.BORDER}; border-radius: 4px;")
         print_btn.clicked.connect(self._print_blueprint)
         pl.addWidget(print_btn)
+        file_row = QHBoxLayout()
+        save_btn = QPushButton("SAVE")
+        load_btn = QPushButton("LOAD")
+        for file_btn in (save_btn, load_btn):
+            file_btn.setFixedHeight(25)
+            file_btn.setFont(QFont("Courier New", 7, QFont.Weight.Bold))
+            file_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+            file_btn.setStyleSheet(f"background: {C.PANEL2}; color: {C.TEXT_MED}; border: 1px solid {C.BORDER}; border-radius: 4px;")
+        save_btn.clicked.connect(self._save_project)
+        load_btn.clicked.connect(self._load_project)
+        file_row.addWidget(save_btn); file_row.addWidget(load_btn)
+        pl.addLayout(file_row)
         pl.addStretch()
 
         generate = QPushButton("▸  GENERATE BLUEPRINT")
@@ -1654,7 +1785,13 @@ class HoloLabOverlay(QWidget):
         self._status = _lbl("READY / waiting for AI or manual design", C.GREEN, 7, True)
         self._status.setWordWrap(True)
         pl.addWidget(self._status)
-        body.addWidget(panel)
+        panel_scroll = QScrollArea()
+        panel_scroll.setWidgetResizable(True)
+        panel_scroll.setFixedWidth(265)
+        panel_scroll.setFrameShape(QFrame.Shape.NoFrame)
+        panel_scroll.setStyleSheet(f"QScrollArea {{ background: {C.PANEL}; border: none; }} QScrollBar:vertical {{ width: 6px; background: {C.BG}; }} QScrollBar::handle:vertical {{ background: {C.BORDER_B}; border-radius: 3px; }}")
+        panel_scroll.setWidget(panel)
+        body.addWidget(panel_scroll)
         root.addLayout(body, stretch=1)
 
         foot = QLabel("SAFE PC PREVIEW  ·  Vector blueprint only  ·  No hardware or weapon systems are activated")
@@ -1712,6 +1849,178 @@ class HoloLabOverlay(QWidget):
             f"\n\nBUILD BOM: {len(self._selected_parts)}\n" + part_preview
         )
         self._status.setText("AI BLUEPRINT RECEIVED / DRAWING ON PC")
+
+    def _on_scene_selection(self, index: int):
+        if index >= 0:
+            geometry = self._canvas.project().get("geometry") or []
+            label = geometry[index].get("label", "PART") if index < len(geometry) else "PART"
+            self._status.setText(f"SELECTED {index + 1:02d} / {label}  ·  DRAG IT IN THE VIEWPORT")
+
+    def _on_scene_changed(self, _project=None):
+        self._status.setText("SCENE CHANGED / SAVE PROJECT OR RUN DIAGNOSTICS")
+
+    @staticmethod
+    def _part_geometry(part: dict, index: int) -> dict:
+        category = str(part.get("category") or "MECHANICAL")
+        if category in ("VISION", "SENSORS", "AUDIO"):
+            kind, w, h, d = "sphere", 80, 80, 70
+        elif category in ("DISPLAY", "OPTICS", "LIGHTING"):
+            kind, w, h, d = "plane", 150, 90, 12
+        elif category in ("POWER", "COMPUTE", "CONTROL", "TEST"):
+            kind, w, h, d = "box", 135, 90, 70
+        else:
+            kind, w, h, d = "box", 120, 70, 50
+        col = index % 4
+        row = index // 4
+        return {
+            "type": kind,
+            "part_id": str(part.get("id") or ""),
+            "label": str(part.get("name") or "PART")[:38],
+            "x": 300 + col * 135,
+            "y": 360 + row * 115,
+            "z": row * 30,
+            "w": w,
+            "h": h,
+            "d": d,
+            "rotation": 0,
+            "scale": 1,
+            "mm_w": part.get("size_mm", [w, h, d])[0] if isinstance(part.get("size_mm"), list) else w,
+            "mm_h": part.get("size_mm", [w, h, d])[1] if isinstance(part.get("size_mm"), list) else h,
+            "mm_d": part.get("size_mm", [w, h, d])[2] if isinstance(part.get("size_mm"), list) else d,
+        }
+
+    def _add_parts_to_scene(self, part_ids=None):
+        ids = normalize_part_ids(part_ids if part_ids is not None else self._selected_parts)
+        project = self._current_project()
+        geometry = list(project.get("geometry") or [])
+        existing = {str(item.get("part_id")) for item in geometry if isinstance(item, dict)}
+        added = 0
+        for part_id in ids:
+            if part_id in existing or part_id not in PARTS_BY_ID:
+                continue
+            geometry.append(self._part_geometry(PARTS_BY_ID[part_id], len(geometry)))
+            existing.add(part_id)
+            added += 1
+        project["geometry"] = geometry
+        self._canvas.set_project(project)
+        if added:
+            self._canvas.set_selected_index(len(geometry) - 1)
+        self._status.setText(f"ASSEMBLY UPDATED / {added} PART(S) PLACED  ·  DRAG PARTS IN VIEWPORT")
+
+    def _open_assembly_editor(self):
+        """Blender-like placement panel: select, drag, snap and edit XYZ."""
+        dlg = QDialog(self)
+        dlg.setWindowTitle("HOLO LAB — ASSEMBLY EDITOR / PLACE PARTS")
+        dlg.setMinimumSize(720, 520)
+        dlg.setStyleSheet(f"""
+            QDialog {{ background: {C.DARK}; color: {C.TEXT}; }}
+            QListWidget, QLineEdit {{ background: #00080f; color: {C.TEXT}; border: 1px solid {C.BORDER}; padding: 5px; }}
+            QPushButton {{ background: {C.PANEL2}; color: {C.TEXT_MED}; border: 1px solid {C.BORDER}; border-radius: 4px; padding: 5px 9px; }}
+            QPushButton:hover {{ color: {C.PRI}; border-color: {C.PRI_DIM}; }}
+        """)
+        root = QVBoxLayout(dlg)
+        root.addWidget(QLabel("Drag parts directly in the PC viewport. Use XYZ and rotation for precise placement; SNAP rounds to the assembly grid."))
+        body = QHBoxLayout()
+        scene_list = QListWidget()
+        body.addWidget(scene_list, stretch=1)
+        controls = QVBoxLayout()
+        fields = {}
+        for key in ("x", "y", "z", "rotation", "scale"):
+            row = QHBoxLayout()
+            label = QLabel(key.upper())
+            label.setFixedWidth(64)
+            field = QLineEdit()
+            field.setPlaceholderText(key)
+            row.addWidget(label); row.addWidget(field)
+            controls.addLayout(row)
+            fields[key] = field
+        apply_btn = QPushButton("APPLY POSITION")
+        snap_btn = QPushButton("SNAP TO GRID")
+        delete_btn = QPushButton("REMOVE FROM SCENE")
+        add_btn = QPushButton("ADD SELECTED BOM PARTS")
+        controls.addWidget(apply_btn); controls.addWidget(snap_btn); controls.addWidget(delete_btn); controls.addWidget(add_btn)
+        controls.addStretch()
+        body.addLayout(controls)
+        root.addLayout(body, stretch=1)
+        close_box = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
+        close_box.rejected.connect(dlg.reject)
+        root.addWidget(close_box)
+
+        def geometry():
+            return self._canvas.project().get("geometry") or []
+
+        def refresh():
+            current = self._canvas.selected_index()
+            scene_list.blockSignals(True)
+            scene_list.clear()
+            for index, item in enumerate(geometry()):
+                label = str(item.get("label") or item.get("part_id") or f"PRIMITIVE {index + 1}")
+                scene_list.addItem(f"{index + 1:02d}  {label}")
+            scene_list.setCurrentRow(current if 0 <= current < scene_list.count() else (0 if scene_list.count() else -1))
+            scene_list.blockSignals(False)
+            sync(scene_list.currentRow())
+
+        def sync(index: int):
+            self._canvas.set_selected_index(index)
+            item = geometry()[index] if 0 <= index < len(geometry()) else {}
+            for key, field in fields.items():
+                if not item:
+                    field.setText("")
+                    continue
+                try:
+                    value = round(float(item.get(key, 0)), 2)
+                except (TypeError, ValueError):
+                    value = 0
+                field.setText(str(value))
+
+        def apply_position():
+            index = scene_list.currentRow()
+            items = geometry()
+            if not (0 <= index < len(items)):
+                return
+            item = items[index]
+            for key, field in fields.items():
+                try:
+                    item[key] = round(float(field.text().strip()), 2)
+                except ValueError:
+                    pass
+            self._canvas.set_selected_index(index)
+            self._canvas.scene_changed.emit(self._canvas.project())
+            self._canvas.update()
+            self._status.setText("POSITION APPLIED / RUN DIAGNOSTICS TO CHECK CLEARANCE")
+
+        def snap_to_grid():
+            index = scene_list.currentRow()
+            items = geometry()
+            if not (0 <= index < len(items)):
+                return
+            for key in ("x", "y", "z"):
+                try:
+                    items[index][key] = round(float(items[index].get(key, 0)) / 10) * 10
+                except (TypeError, ValueError):
+                    pass
+            refresh()
+            self._canvas.set_selected_index(index)
+            self._canvas.scene_changed.emit(self._canvas.project())
+            self._canvas.update()
+
+        def remove_part():
+            index = scene_list.currentRow()
+            items = geometry()
+            if 0 <= index < len(items):
+                items.pop(index)
+                self._canvas.set_project({**self._current_project(), "geometry": items})
+                self._canvas.set_selected_index(min(index, len(items) - 1))
+                refresh()
+                self._status.setText("PART REMOVED / SAVE PROJECT WHEN READY")
+
+        scene_list.currentRowChanged.connect(sync)
+        apply_btn.clicked.connect(apply_position)
+        snap_btn.clicked.connect(snap_to_grid)
+        delete_btn.clicked.connect(remove_part)
+        add_btn.clicked.connect(lambda: (self._add_parts_to_scene(), refresh()))
+        refresh()
+        dlg.exec()
 
     def _current_project(self) -> dict:
         project = self._canvas.project()
@@ -1778,12 +2087,18 @@ class HoloLabOverlay(QWidget):
         search.textChanged.connect(filter_items)
         list_w.itemChanged.connect(lambda _item: refresh_count())
         refresh_count()
+        add_to_scene = [False]
         buttons = QDialogButtonBox(
             QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
         )
         buttons.accepted.connect(dlg.accept)
         buttons.rejected.connect(dlg.reject)
-        lay.addWidget(buttons)
+        scene_button = QPushButton("ADD SELECTED TO SCENE")
+        scene_button.clicked.connect(lambda: (add_to_scene.__setitem__(0, True), dlg.accept()))
+        button_row = QHBoxLayout()
+        button_row.addWidget(scene_button)
+        button_row.addWidget(buttons)
+        lay.addLayout(button_row)
         if dlg.exec() != QDialog.DialogCode.Accepted:
             return
         self._selected_parts = normalize_part_ids(
@@ -1792,6 +2107,8 @@ class HoloLabOverlay(QWidget):
             if list_w.item(i).checkState() == Qt.CheckState.Checked
         )
         self.set_project({**self._current_project(), "parts": self._selected_parts})
+        if add_to_scene[0]:
+            self._add_parts_to_scene(self._selected_parts)
         self._status.setText(f"BOM UPDATED / {len(self._selected_parts)} PARTS SELECTED")
 
     def _run_diagnostics(self, symptom: str = ""):
@@ -1847,6 +2164,18 @@ class HoloLabOverlay(QWidget):
             f"<b>TEST:</b> {html.escape(str(issue.get('test')))}</li>"
             for issue in issues
         )
+        def _geom_number(item, key):
+            try:
+                return f"{float(item.get(key, 0)):.1f}"
+            except (TypeError, ValueError):
+                return "0.0"
+        geometry_html = "".join(
+            f"<tr><td>{html.escape(str(item.get('label') or item.get('part_id') or i + 1))}</td>"
+            f"<td>{html.escape(str(item.get('type', 'box')))}</td><td>{_geom_number(item, 'x')}</td>"
+            f"<td>{_geom_number(item, 'y')}</td><td>{_geom_number(item, 'z')}</td>"
+            f"<td>{_geom_number(item, 'w')} × {_geom_number(item, 'h')} × {_geom_number(item, 'd')}</td></tr>"
+            for i, item in enumerate(project.get("geometry", [])) if isinstance(item, dict)
+        )
         document_html = f"""
         <html><head><style>
         body {{ font-family: sans-serif; color: #111; }} h1 {{ color: #064e63; }}
@@ -1859,6 +2188,9 @@ class HoloLabOverlay(QWidget):
         <b>Mode:</b> {html.escape(str(project.get('mode', 'holo')))}<br>
         <b>Project ID:</b> {html.escape(str(project.get('id', 'PC-HOLO')))}</p>
         <h2>AI COMPONENT SCHEDULE</h2><ul>{components or '<li>No component schedule supplied</li>'}</ul>
+        <h2>SCENE PLACEMENT / ASSEMBLY COORDINATES</h2>
+        <table><tr><th>Object</th><th>Primitive</th><th>X</th><th>Y</th><th>Z</th><th>Size / footprint</th></tr>
+        {geometry_html or '<tr><td colspan="6">No placed scene geometry yet — use ASSEMBLY EDITOR.</td></tr>'}</table>
         <h2>PARTS / BUY OR MAKE BOM</h2>
         <table><tr><th>Part</th><th>Category</th><th>Source</th><th>Est.</th><th>Supplier / route</th></tr>
         {parts_html or '<tr><td colspan="5">No catalog parts selected</td></tr>'}</table>
@@ -1882,6 +2214,33 @@ class HoloLabOverlay(QWidget):
         except Exception as exc:
             self._status.setText("PRINTER ERROR / SAVE REPORT OR CHECK DRIVER")
             self._run_diagnostics(f"printer error: {exc}")
+
+    def _save_project(self):
+        path, _ = QFileDialog.getSaveFileName(
+            self, "Save Holo Lab project", "holo_project.json", "Holo project (*.json);;All files (*.*)"
+        )
+        if not path:
+            return
+        try:
+            Path(path).write_text(json.dumps(self._current_project(), ensure_ascii=False, indent=2), encoding="utf-8")
+            self._status.setText("PROJECT SAVED / READY FOR REAL-WORLD BUILD REVIEW")
+        except Exception as exc:
+            self._status.setText(f"SAVE ERROR / {str(exc)[:60]}")
+
+    def _load_project(self):
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Load Holo Lab project", "", "Holo project (*.json);;All files (*.*)"
+        )
+        if not path:
+            return
+        try:
+            project = json.loads(Path(path).read_text(encoding="utf-8"))
+            if not isinstance(project, dict):
+                raise ValueError("project must be an object")
+            self.set_project(project)
+            self._status.setText("PROJECT LOADED / RUN DIAGNOSTICS BEFORE POWER")
+        except Exception as exc:
+            self._status.setText(f"LOAD ERROR / {str(exc)[:60]}")
 
     def print_blueprint(self):
         self._print_blueprint()

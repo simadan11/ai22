@@ -137,6 +137,8 @@ def diagnose_project(project: dict | None, selected_ids: Iterable[str] | None = 
     """Return actionable bench checks; never says that hardware is safe without tests."""
     project = project or {}
     ids = set(normalize_part_ids(selected_ids))
+    geometry = [item for item in (project.get("geometry") or []) if isinstance(item, dict)]
+    ids.update(normalize_part_ids(item.get("part_id") for item in geometry))
     parts = parts_for_ids(ids)
     categories = {part["category"] for part in parts}
     text = " ".join(str(project.get(key) or "") for key in ("model", "subject", "name", "notes", "blueprint")).lower()
@@ -144,6 +146,38 @@ def diagnose_project(project: dict | None, selected_ids: Iterable[str] | None = 
 
     def add(severity: str, problem: str, fix: str, test: str):
         issues.append({"severity": severity, "problem": problem, "fix": fix, "test": test})
+
+    if not geometry:
+        add("WARN", "No physical part is placed in the assembly scene.", "Open ASSEMBLY EDITOR, add selected BOM parts to the scene, then drag them into their intended locations.", "Check mounting, cable routes, service access and clearance before fabrication.")
+    else:
+        placed_ids = {str(item.get("part_id")) for item in geometry if item.get("part_id")}
+        for part_id in sorted(ids - placed_ids):
+            add("INFO", f"BOM part {part_id} is selected but not placed in the scene.", "Add it to the scene or mark it as an off-board/service part in the build notes.", "Confirm the final enclosure still has room for it.")
+        # A rough 2-D clearance check catches obvious overlaps. It is a review
+        # aid, not a substitute for a dimensioned CAD model or datasheets.
+        def num(item, key, fallback=0.0):
+            try:
+                return float(item.get(key, fallback))
+            except (TypeError, ValueError):
+                return fallback
+        collision_reported = False
+        for left_index, left in enumerate(geometry):
+            if str(left.get("type")) in ("line", "point", "ring"):
+                continue
+            for right in geometry[left_index + 1:]:
+                if str(right.get("type")) in ("line", "point", "ring"):
+                    continue
+                x_overlap = abs(num(left, "x", 500) - num(right, "x", 500)) < (num(left, "w", 100) + num(right, "w", 100)) * .42
+                y_overlap = abs(num(left, "y", 500) - num(right, "y", 500)) < (num(left, "h", 100) + num(right, "h", 100)) * .34
+                z_overlap = abs(num(left, "z", 0) - num(right, "z", 0)) < (num(left, "d", 50) + num(right, "d", 50)) * .5 + 5
+                if x_overlap and y_overlap and z_overlap:
+                    a = left.get("label") or left.get("part_id") or "part A"
+                    b = right.get("label") or right.get("part_id") or "part B"
+                    add("WARN", f"Possible assembly overlap: {a} / {b}.", "Move one part, add a bracket/spacer, or verify that the overlap is intentional and serviceable.", "Measure the real footprints and leave room for connectors, screws and airflow.")
+                    collision_reported = True
+                    break
+            if collision_reported:
+                break
 
     if not ids:
         add("WARN", "No physical parts are selected.", "Open PARTS CATALOG and select a controller, power path, protection, sensors and the requested output parts.", "Start with a current-limited bench supply, not a Li-Po.")
