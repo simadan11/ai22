@@ -334,6 +334,7 @@ TOOL_DECLARATIONS = [
                 "notes": {"type": "STRING", "description": "What it should look like or do"},
                 "blueprint": {"type": "STRING", "description": "AI-generated concise construction/shape brief"},
                 "components": {"type": "ARRAY", "items": {"type": "STRING"}, "description": "3-16 AI-generated component names for the blueprint"},
+                "parts": {"type": "ARRAY", "items": {"type": "STRING"}, "description": "Catalog part IDs to buy, make or test"},
                 "geometry": {
                     "type": "ARRAY",
                     "description": "3-32 safe drawing primitives. Coordinates x/y are 0-1000, z is -500..500. Types: box, cylinder, sphere, ring, line, point, cone, plane.",
@@ -360,6 +361,29 @@ TOOL_DECLARATIONS = [
             },
             "required": ["prototype"]
         }
+    },
+    {
+        "name": "holo_diagnose",
+        "description": (
+            "Diagnoses a Holo Lab build or prototype when the user says it does not work. "
+            "Give the symptom and return likely problems, fixes and safe bench tests; never tell the user to bypass battery protection."
+        ),
+        "parameters": {
+            "type": "OBJECT",
+            "properties": {
+                "symptom": {"type": "STRING", "description": "What is wrong: black screen, camera, heat, reset, battery, Wi-Fi, printer, etc."},
+                "parts": {"type": "ARRAY", "items": {"type": "STRING"}, "description": "Optional catalog part IDs in the build"},
+            },
+            "required": ["symptom"]
+        }
+    },
+    {
+        "name": "print_holo_blueprint",
+        "description": (
+            "Prints the current Holo Lab blueprint, AI component schedule, selected buy/make BOM and diagnostics using the PC printer dialog. "
+            "Use when the user explicitly asks to print the hologram scheme or blueprint."
+        ),
+        "parameters": {"type": "OBJECT", "properties": {}, "required": []}
     },
     {
         "name": "remember_face",
@@ -1104,6 +1128,7 @@ class JarvisLive:
                         "notes": args.get("notes") or "",
                         "components": args.get("components") or [],
                         "geometry": args.get("geometry") or [],
+                        "parts": args.get("parts") or [],
                     })
                     result = "Rendered the custom hologram and blueprint locally on the PC. The dashboard is offline, so remote mirroring is unavailable."
                 else:
@@ -1135,6 +1160,7 @@ class JarvisLive:
                             subject=_subject,
                             blueprint=args.get("blueprint") or "",
                             geometry=args.get("geometry"),
+                            parts=args.get("parts"),
                         )
                         self.ui.show_holo_project(project)
                         await self._dashboard.broadcast({"type": "holo_project", "project": project})
@@ -1154,7 +1180,23 @@ class JarvisLive:
                     except ValueError as exc:
                         result = f"I could not create that hologram: {exc}. Use a supported wearable or describe any custom subject."
 
+            elif name == "holo_diagnose":
+                from actions.holo_lab import diagnose_project as _diagnose_holo, format_diagnostics as _format_holo
+                symptom = str(args.get("symptom") or "unknown symptom")[:300]
+                issues = _diagnose_holo(
+                    {"model": "custom", "subject": "current Holo Lab build", "notes": symptom},
+                    args.get("parts"),
+                    symptom,
+                )
+                self.ui.run_holo_diagnostics(symptom)
+                result = _format_holo(issues)
+
+            elif name == "print_holo_blueprint":
+                self.ui.print_holo_blueprint()
+                result = "I opened the PC printer dialog for the current Holo Lab blueprint, BOM and diagnostics. Choose a printer and confirm."
+
             elif name == "remember_face":
+
                 who = (args.get("name") or args.get("person") or "").strip()
                 frame = self._last_frame
                 if not who:

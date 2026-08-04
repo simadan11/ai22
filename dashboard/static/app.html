@@ -633,6 +633,8 @@
           <button class="holo-btn" id="holo-camera-toggle" onclick="toggleHoloCamera()">◉ START CAMERA FEED</button>
           <button class="holo-btn" id="holo-scan-btn" onclick="holoScanSpace()">⌁ SCAN SPACE</button>
           <button class="holo-btn" onclick="holoAskJarvis()">✦ ASK JARVIS ABOUT VIEW</button>
+          <button class="holo-btn" onclick="printHoloBlueprint()">⎙ PRINT BLUEPRINT</button>
+          <button class="holo-btn" onclick="openHoloParts()">▣ OPEN FULL PARTS CATALOG</button>
           <p class="holo-hint">The camera stays on this device. SCAN SPACE uses the existing EDITH vision endpoint to place labels on the test feed.</p>
 
           <div class="holo-section-title" style="margin-top:16px">04 / COMPONENTS</div>
@@ -1786,6 +1788,37 @@
         holoStageStatus.textContent = 'VISUAL PROTOTYPE READY / SERVER UNAVAILABLE';
         toast('Hologram view ready locally');
       }
+    }
+
+    async function openHoloParts() {
+      const popup = window.open('', '_blank');
+      if (!popup) { toast('Allow popups to open the catalog'); return; }
+      popup.document.write('<p style="font-family:Arial;padding:20px">Loading Holo Lab parts catalog…</p>');
+      try {
+        const response = await _authFetch('/api/holo-parts');
+        const data = await response.json();
+        const rows = (data.parts || []).map(part => `<tr><td>${esc(part.name)}</td><td>${esc(part.category)}</td><td>${esc(part.source)}</td><td>~$${part.price}</td><td>${esc(part.supplier)}</td><td>${esc(part.spec)}</td></tr>`).join('');
+        popup.document.open();
+        popup.document.write(`<html><head><title>Holo Lab Parts Catalog</title><style>body{font-family:Arial;padding:20px;color:#111}h1{color:#075985}table{border-collapse:collapse;width:100%;font-size:12px}th,td{border:1px solid #94a3b8;padding:6px;text-align:left}th{background:#cffafe}</style></head><body><h1>HOLO LAB — PARTS CATALOG</h1><p>BUY and MAKE entries for safe prototyping. Verify specifications and suppliers before purchase.</p><table><tr><th>Part</th><th>Category</th><th>Source</th><th>Est.</th><th>Supplier / route</th><th>Spec</th></tr>${rows}</table></body></html>`);
+        popup.document.close(); popup.focus();
+      } catch (_) {
+        popup.document.body.innerHTML = '<p style="font-family:Arial;padding:20px">Could not load the catalog. Use the PC Holo Lab.</p>';
+      }
+    }
+
+    function printHoloBlueprint() {
+      const model = document.getElementById('holo-model-select').value;
+      const subject = document.getElementById('holo-subject').value.trim() || 'custom hologram object';
+      const name = document.getElementById('holo-project-name').value.trim() || subject;
+      const notes = document.getElementById('holo-notes').value.trim();
+      const parts = (_HOLO_MODELS[model]?.parts || []).map(part => `<li><b>${esc(part.name)}</b> — ${esc(part.detail)}</li>`).join('');
+      const popup = window.open('', '_blank', 'noopener,noreferrer');
+      if (!popup) { window.print(); return; }
+      popup.document.write(`<!doctype html><html><head><title>Holo Blueprint — ${esc(name)}</title><style>
+        body{font-family:Arial,sans-serif;color:#111;padding:28px}h1{color:#075985}h2{color:#0e7490;border-bottom:1px solid #94a3b8;padding-bottom:5px}li{margin:8px 0} .note{color:#475569}
+      </style></head><body><h1>HOLO LAB BLUEPRINT</h1><p><b>Project:</b> ${esc(name)}<br><b>Subject:</b> ${esc(subject)}<br><b>Mode:</b> ${esc(_holoMode)}</p><h2>Components</h2><ul>${parts || '<li>AI geometry primitives — see PC report</li>'}</ul><h2>Design brief</h2><p>${esc(notes || 'No additional brief')}</p><p class="note">Software visualization only. Validate voltage, current, heat, optics, battery protection and fit before building.</p></body></html>`);
+      popup.document.close(); popup.focus();
+      setTimeout(() => popup.print(), 250);
     }
 
     async function askJarvisHoloDesign() {

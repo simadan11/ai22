@@ -19,6 +19,8 @@ import string
 import time
 from pathlib import Path
 
+from actions.holo_lab import PART_CATALOG, normalize_part_ids
+
 _DEPS_OK = False
 try:
     from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Request
@@ -636,6 +638,7 @@ class DashboardServer:
         subject: str = "",
         blueprint: str = "",
         geometry=None,
+        parts=None,
     ) -> dict:
         """Create one sanitized, session-scoped visual prototype for any subject."""
         allowed_models = {"glasses", "glove", "suit", "custom"}
@@ -720,6 +723,7 @@ class DashboardServer:
             "blueprint": clean_blueprint,
             "components": clean_components,
             "geometry": clean_geometry,
+            "parts": normalize_part_ids(parts),
             "created_at": int(time.time()),
         }
         self._holo_projects.append(project)
@@ -1088,6 +1092,7 @@ class DashboardServer:
                     subject=body.get("subject", ""),
                     blueprint=body.get("blueprint", ""),
                     geometry=body.get("geometry"),
+                    parts=body.get("parts"),
                 )
             except ValueError as exc:
                 return JSONResponse({"ok": False, "error": str(exc)}, status_code=400)
@@ -1105,6 +1110,13 @@ class DashboardServer:
             if not _auth(req):
                 return JSONResponse({"ok": False, "error": "Unauthorized"}, status_code=401)
             return JSONResponse({"ok": True, "projects": list(self._holo_projects)})
+
+        @app.get("/api/holo-parts")
+        async def list_holo_parts(req: Request):
+            """Return the offline buy/make/test catalog for the remote lab."""
+            if not _auth(req):
+                return JSONResponse({"ok": False, "error": "Unauthorized"}, status_code=401)
+            return JSONResponse({"ok": True, "parts": list(PART_CATALOG)})
 
         # ── Phone camera live stream → PC HUD ─────────────────────────────────
 

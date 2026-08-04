@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import html
 import json
 import math
 import os
@@ -18,7 +19,13 @@ if platform.system() == "Windows" and "QT_QPA_PLATFORM" not in os.environ:
 
 import psutil
 
+from actions.holo_lab import (
+    PART_CATALOG, PARTS_BY_ID, diagnose_project, format_diagnostics,
+    normalize_part_ids, parts_for_ids, suggested_part_ids,
+)
+
 if platform.system() == "Windows":
+
     _WIN_HIDE: dict = {"creationflags": subprocess.CREATE_NO_WINDOW}
 else:
     _WIN_HIDE: dict = {}
@@ -30,11 +37,12 @@ from PyQt6.QtCore import (
 from PyQt6.QtGui import (
     QBrush, QColor, QConicalGradient, QDragEnterEvent, QDropEvent, QFont,
     QFontDatabase, QKeySequence, QLinearGradient, QPainter, QPainterPath,
-    QPen, QPixmap, QRadialGradient, QShortcut,
+    QPen, QPixmap, QRadialGradient, QShortcut, QTextDocument,
 )
+from PyQt6.QtPrintSupport import QPrintDialog, QPrinter
 from PyQt6.QtWidgets import (
-    QApplication, QFileDialog, QComboBox, QFrame, QHBoxLayout, QLabel, QLineEdit,
-    QMainWindow, QPushButton, QScrollArea, QSizePolicy, QSplitter,
+    QApplication, QDialog, QDialogButtonBox, QFileDialog, QComboBox, QFrame, QHBoxLayout, QLabel, QLineEdit,
+    QListWidget, QListWidgetItem, QMainWindow, QPushButton, QScrollArea, QSizePolicy, QSplitter,
     QStackedWidget, QTextEdit, QVBoxLayout, QWidget, QProgressBar,
 )
 
@@ -1192,6 +1200,7 @@ class HoloBlueprintCanvas(QWidget):
         if not isinstance(geometry, (list, tuple)):
             geometry = []
         safe_geometry = [g for g in geometry[:32] if isinstance(g, dict)]
+        safe_parts = normalize_part_ids(project.get("parts"))
         self._project = {
             "id": str(project.get("id") or "PC-HOLO"),
             "name": str(project.get("name") or "Untitled hologram prototype")[:64],
@@ -1203,6 +1212,7 @@ class HoloBlueprintCanvas(QWidget):
             "blueprint": str(project.get("blueprint") or "")[:1200],
             "components": components or list(self._DEFAULT_PARTS[model]),
             "geometry": safe_geometry,
+            "parts": safe_parts,
         }
         self.update()
 
@@ -1604,8 +1614,31 @@ class HoloLabOverlay(QWidget):
         pl.addWidget(self._notes)
         self._parts_lbl = _lbl("", C.TEXT_MED, 7)
         self._parts_lbl.setWordWrap(True)
-        self._parts_lbl.setMinimumHeight(100)
+        self._parts_lbl.setMinimumHeight(72)
+        self._parts_lbl.setMaximumHeight(92)
         pl.addWidget(self._parts_lbl)
+
+        parts_btn = QPushButton("▣  PARTS CATALOG / BUILD")
+        parts_btn.setFixedHeight(27)
+        parts_btn.setFont(QFont("Courier New", 7, QFont.Weight.Bold))
+        parts_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        parts_btn.setStyleSheet(f"background: {C.PANEL2}; color: {C.TEXT_MED}; border: 1px solid {C.BORDER}; border-radius: 4px;")
+        parts_btn.clicked.connect(self._open_parts_catalog)
+        pl.addWidget(parts_btn)
+        diag_btn = QPushButton("⚠  RUN DIAGNOSTICS / HELP")
+        diag_btn.setFixedHeight(27)
+        diag_btn.setFont(QFont("Courier New", 7, QFont.Weight.Bold))
+        diag_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        diag_btn.setStyleSheet(f"background: {C.PANEL2}; color: {C.ACC2}; border: 1px solid {C.BORDER}; border-radius: 4px;")
+        diag_btn.clicked.connect(self._run_diagnostics)
+        pl.addWidget(diag_btn)
+        print_btn = QPushButton("⎙  PRINT BLUEPRINT")
+        print_btn.setFixedHeight(27)
+        print_btn.setFont(QFont("Courier New", 7, QFont.Weight.Bold))
+        print_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        print_btn.setStyleSheet(f"background: {C.PANEL2}; color: {C.GREEN}; border: 1px solid {C.BORDER}; border-radius: 4px;")
+        print_btn.clicked.connect(self._print_blueprint)
+        pl.addWidget(print_btn)
         pl.addStretch()
 
         generate = QPushButton("▸  GENERATE BLUEPRINT")
@@ -1628,6 +1661,7 @@ class HoloLabOverlay(QWidget):
         foot.setFont(QFont("Courier New", 7))
         foot.setStyleSheet(f"color: {C.TEXT_DIM}; background: transparent;")
         root.addWidget(foot)
+        self._selected_parts: list[str] = []
         self.set_project({})
 
     def _close(self):
@@ -1647,12 +1681,16 @@ class HoloLabOverlay(QWidget):
             "clarity": 90,
             "notes": self._notes.toPlainText().strip(),
             "components": list(self._PARTS[model]),
+            "parts": list(self._selected_parts or suggested_part_ids({"model": model, "subject": subject, "notes": self._notes.toPlainText()})),
         })
         self._status.setText("LOCAL BLUEPRINT GENERATED / READY")
 
     def set_project(self, project: dict | None):
         p = dict(project or {})
         model = HoloBlueprintCanvas._model_key(p.get("model"))
+        p["model"] = model
+        self._selected_parts = normalize_part_ids(p.get("parts")) if "parts" in p else suggested_part_ids(p)
+        p["parts"] = list(self._selected_parts)
         mode = str(p.get("mode") or "holo").lower().strip()
         model_idx = self._model.findData(model)
         mode_idx = self._mode.findData(mode)
@@ -1667,8 +1705,189 @@ class HoloLabOverlay(QWidget):
         current = self._canvas.project()
         self._id_lbl.setText(current["id"])
         items = current.get("components") or []
-        self._parts_lbl.setText("COMPONENTS\n" + "\n".join(f"{i + 1:02d}  {x}" for i, x in enumerate(items[:8])))
+        part_names = [PARTS_BY_ID[part_id]["name"] for part_id in self._selected_parts if part_id in PARTS_BY_ID]
+        part_preview = "\n".join(f"• {x}" for x in part_names[:4]) or "• no parts selected"
+        self._parts_lbl.setText(
+            "COMPONENTS\n" + "\n".join(f"{i + 1:02d}  {x}" for i, x in enumerate(items[:5])) +
+            f"\n\nBUILD BOM: {len(self._selected_parts)}\n" + part_preview
+        )
         self._status.setText("AI BLUEPRINT RECEIVED / DRAWING ON PC")
+
+    def _current_project(self) -> dict:
+        project = self._canvas.project()
+        project["parts"] = list(self._selected_parts)
+        return project
+
+    def _open_parts_catalog(self):
+        """Let the user assemble a buy/make/test BOM from the offline catalog."""
+        dlg = QDialog(self)
+        dlg.setWindowTitle("HOLO LAB — PARTS CATALOG / BUILD")
+        dlg.setMinimumSize(720, 560)
+        dlg.setStyleSheet(f"""
+            QDialog {{ background: {C.DARK}; color: {C.TEXT}; }}
+            QLineEdit {{ background: #000d14; color: {C.TEXT}; border: 1px solid {C.BORDER}; border-radius: 4px; padding: 6px; }}
+            QListWidget {{ background: #00080f; color: {C.TEXT}; border: 1px solid {C.BORDER}; }}
+            QListWidget::item {{ padding: 5px; border-bottom: 1px solid {C.BORDER}; }}
+            QListWidget::item:selected {{ background: {C.PRI_GHO}; }}
+            QPushButton {{ background: {C.PANEL2}; color: {C.TEXT_MED}; border: 1px solid {C.BORDER}; border-radius: 4px; padding: 5px 10px; }}
+            QPushButton:hover {{ color: {C.PRI}; border-color: {C.PRI_DIM}; }}
+        """)
+        lay = QVBoxLayout(dlg)
+        title = QLabel("PARTS YOU CAN BUY OR MAKE  ·  select a starter BOM, then test one subsystem at a time")
+        title.setFont(QFont("Courier New", 8, QFont.Weight.Bold))
+        title.setStyleSheet(f"color: {C.PRI};")
+        lay.addWidget(title)
+        search = QLineEdit()
+        search.setPlaceholderText("Search camera, display, battery, sensor, 3-D print, test…")
+        lay.addWidget(search)
+        list_w = QListWidget()
+        lay.addWidget(list_w, stretch=1)
+        count_lbl = QLabel()
+        count_lbl.setFont(QFont("Courier New", 8))
+        count_lbl.setStyleSheet(f"color: {C.GREEN};")
+        lay.addWidget(count_lbl)
+
+        for part in PART_CATALOG:
+            item = QListWidgetItem(
+                f"{part['name']}   [{part['category']}]   {part['source']}   ~${part['price']}"
+            )
+            item.setData(Qt.ItemDataRole.UserRole, part["id"])
+            item.setToolTip(f"{part['spec']}\nSupplier: {part['supplier']}")
+            item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
+            item.setCheckState(
+                Qt.CheckState.Checked if part["id"] in self._selected_parts else Qt.CheckState.Unchecked
+            )
+            list_w.addItem(item)
+
+        def refresh_count():
+            selected = sum(
+                list_w.item(i).checkState() == Qt.CheckState.Checked
+                for i in range(list_w.count()) if not list_w.item(i).isHidden()
+            )
+            count_lbl.setText(f"VISIBLE SELECTED: {selected}  ·  catalog: {len(PART_CATALOG)} parts  ·  BUY and MAKE entries are marked")
+
+        def filter_items(text: str):
+            query = text.strip().lower()
+            for i in range(list_w.count()):
+                item = list_w.item(i)
+                part = PARTS_BY_ID.get(item.data(Qt.ItemDataRole.UserRole), {})
+                haystack = " ".join(str(part.get(k, "")) for k in ("id", "name", "category", "source", "spec", "supplier")).lower()
+                item.setHidden(bool(query) and query not in haystack)
+            refresh_count()
+
+        search.textChanged.connect(filter_items)
+        list_w.itemChanged.connect(lambda _item: refresh_count())
+        refresh_count()
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
+        )
+        buttons.accepted.connect(dlg.accept)
+        buttons.rejected.connect(dlg.reject)
+        lay.addWidget(buttons)
+        if dlg.exec() != QDialog.DialogCode.Accepted:
+            return
+        self._selected_parts = normalize_part_ids(
+            list_w.item(i).data(Qt.ItemDataRole.UserRole)
+            for i in range(list_w.count())
+            if list_w.item(i).checkState() == Qt.CheckState.Checked
+        )
+        self.set_project({**self._current_project(), "parts": self._selected_parts})
+        self._status.setText(f"BOM UPDATED / {len(self._selected_parts)} PARTS SELECTED")
+
+    def _run_diagnostics(self, symptom: str = ""):
+        """Explain likely faults and safe next tests instead of blindly retrying hardware."""
+        dlg = QDialog(self)
+        dlg.setWindowTitle("HOLO LAB — DIAGNOSTICS / HELP")
+        dlg.setMinimumSize(700, 500)
+        dlg.setStyleSheet(f"QDialog {{ background: {C.DARK}; }} QLineEdit, QTextEdit {{ background: #00080f; color: {C.TEXT}; border: 1px solid {C.BORDER}; padding: 6px; }} QPushButton {{ background: {C.PANEL2}; color: {C.TEXT_MED}; border: 1px solid {C.BORDER}; padding: 5px 10px; }}")
+        lay = QVBoxLayout(dlg)
+        head = QLabel("DIAGNOSTICS  ·  describe the symptom; the assistant gives a problem, fix and bench test")
+        head.setFont(QFont("Courier New", 8, QFont.Weight.Bold))
+        head.setStyleSheet(f"color: {C.ACC2};")
+        lay.addWidget(head)
+        symptom_edit = QLineEdit(symptom)
+        symptom_edit.setPlaceholderText("e.g. black screen, camera not working, resets, battery gets hot…")
+        lay.addWidget(symptom_edit)
+        report = QTextEdit()
+        report.setReadOnly(True)
+        report.setFont(QFont("Courier New", 8))
+        lay.addWidget(report, stretch=1)
+        run_btn = QPushButton("⚠  CHECK PROJECT")
+        close_box = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
+        close_box.rejected.connect(dlg.reject)
+        row = QHBoxLayout(); row.addWidget(run_btn); row.addWidget(close_box)
+        lay.addLayout(row)
+
+        def run_check():
+            issues = diagnose_project(self._current_project(), self._selected_parts, symptom_edit.text())
+            report.setPlainText(format_diagnostics(issues))
+            errors = sum(x.get("severity") == "ERROR" for x in issues)
+            self._status.setText(f"DIAGNOSTICS COMPLETE / {errors} ERROR(S) / TEST BEFORE POWER")
+
+        run_btn.clicked.connect(run_check)
+        run_check()
+        dlg.exec()
+
+    def _print_blueprint(self):
+        """Send a printable BOM, blueprint brief and diagnostics to a real printer."""
+        project = self._current_project()
+        issues = diagnose_project(project, self._selected_parts)
+        subject = html.escape(str(project.get("subject") or project.get("name") or "custom hologram"))
+        name = html.escape(str(project.get("name") or "Holo project"))
+        components = "".join(f"<li>{html.escape(str(x))}</li>" for x in project.get("components", []))
+        parts_html = "".join(
+            f"<tr><td>{html.escape(part['name'])}</td><td>{html.escape(part['category'])}</td>"
+            f"<td>{html.escape(part['source'])}</td><td>${part['price']}</td>"
+            f"<td>{html.escape(part['supplier'])}</td></tr>"
+            for part in parts_for_ids(self._selected_parts)
+        )
+        issues_html = "".join(
+            f"<li><b>{html.escape(str(issue.get('severity')))}</b> {html.escape(str(issue.get('problem')))}<br>"
+            f"<b>FIX:</b> {html.escape(str(issue.get('fix')))}<br>"
+            f"<b>TEST:</b> {html.escape(str(issue.get('test')))}</li>"
+            for issue in issues
+        )
+        document_html = f"""
+        <html><head><style>
+        body {{ font-family: sans-serif; color: #111; }} h1 {{ color: #064e63; }}
+        h2 {{ color: #0e7490; border-bottom: 1px solid #9ca3af; }}
+        table {{ border-collapse: collapse; width: 100%; }} th,td {{ border: 1px solid #9ca3af; padding: 5px; font-size: 9pt; }}
+        th {{ background: #cffafe; }} li {{ margin: 6px 0; }} .small {{ color: #4b5563; }}
+        </style></head><body>
+        <h1>HOLO LAB — BLUEPRINT + BUILD REPORT</h1>
+        <p><b>Project:</b> {name}<br><b>Subject:</b> {subject}<br>
+        <b>Mode:</b> {html.escape(str(project.get('mode', 'holo')))}<br>
+        <b>Project ID:</b> {html.escape(str(project.get('id', 'PC-HOLO')))}</p>
+        <h2>AI COMPONENT SCHEDULE</h2><ul>{components or '<li>No component schedule supplied</li>'}</ul>
+        <h2>PARTS / BUY OR MAKE BOM</h2>
+        <table><tr><th>Part</th><th>Category</th><th>Source</th><th>Est.</th><th>Supplier / route</th></tr>
+        {parts_html or '<tr><td colspan="5">No catalog parts selected</td></tr>'}</table>
+        <h2>DIAGNOSTICS AND NEXT TESTS</h2><ul>{issues_html}</ul>
+        <p class="small">Software concept only. Verify voltage, current, heat, fit, optics, battery protection and local regulations before building. Never look into an untested bright source or laser.</p>
+        </body></html>
+        """
+        try:
+            printer = QPrinter(QPrinter.PrinterMode.HighResolution)
+            dialog = QPrintDialog(printer, self)
+            if dialog.exec() != QDialog.DialogCode.Accepted:
+                self._status.setText("PRINT CANCELLED")
+                return
+            document = QTextDocument()
+            document.setHtml(document_html)
+            if hasattr(document, "print_"):
+                document.print_(printer)
+            else:
+                document.print(printer)
+            self._status.setText("BLUEPRINT SENT TO PRINTER")
+        except Exception as exc:
+            self._status.setText("PRINTER ERROR / SAVE REPORT OR CHECK DRIVER")
+            self._run_diagnostics(f"printer error: {exc}")
+
+    def print_blueprint(self):
+        self._print_blueprint()
+
+    def show_diagnostics(self, symptom: str = ""):
+        self._run_diagnostics(symptom)
 
     def keyPressEvent(self, event):
         if event.key() == Qt.Key.Key_Escape:
@@ -2503,6 +2722,8 @@ class MainWindow(QMainWindow):
     _reconfig_sig   = pyqtSignal()           # trigger setup overlay from any thread
     _camera_sig     = pyqtSignal(bytes)      # show camera frame preview (small overlay)
     _holo_sig       = pyqtSignal(object)     # AI-generated blueprint → PC Holo Lab
+    _holo_diag_sig  = pyqtSignal(str)        # diagnostics request from AI
+    _holo_print_sig = pyqtSignal()           # printer request from AI
     _cam_stream_sig = pyqtSignal(bool)       # True=start live stream, False=stop
     _cam_frame_sig  = pyqtSignal(bytes)      # live camera frame → HUD area
     _scan_sig       = pyqtSignal(bytes, object)  # phone scan frame + detections → HUD area
@@ -2652,6 +2873,8 @@ class MainWindow(QMainWindow):
         self._reconfig_sig.connect(self._show_setup)
         self._camera_sig.connect(self._show_camera_frame)
         self._holo_sig.connect(self._show_holo_project)
+        self._holo_diag_sig.connect(self._show_holo_diagnostics)
+        self._holo_print_sig.connect(self._print_holo_project)
         self._cam_stream_sig.connect(self._on_cam_stream)
         self._cam_frame_sig.connect(self._on_cam_frame)
         self._scan_sig.connect(self._on_phone_scan)
@@ -4451,6 +4674,18 @@ class MainWindow(QMainWindow):
             f"SYS: Holo blueprint rendered on PC — {self._holo_overlay._canvas.project().get('id', 'PC-HOLO')}"
         )
 
+    def _show_holo_diagnostics(self, symptom: str = ""):
+        if self._holo_overlay is None or not self._holo_overlay.isVisible():
+            self._open_holo_pc()
+        if self._holo_overlay:
+            self._holo_overlay.show_diagnostics(symptom)
+
+    def _print_holo_project(self):
+        if self._holo_overlay is None or not self._holo_overlay.isVisible():
+            self._open_holo_pc()
+        if self._holo_overlay:
+            self._holo_overlay.print_blueprint()
+
     def _open_remote(self):
         if not self.on_remote_clicked:
             self._log.append_log("SYS: Dashboard not running — remote unavailable.")
@@ -5002,6 +5237,14 @@ class JarvisUI:
     def show_holo_project(self, project: dict | None = None):
         """Thread-safe: show an AI-generated wearable blueprint on the PC."""
         self._win._holo_sig.emit(project or {})
+
+    def run_holo_diagnostics(self, symptom: str = ""):
+        """Thread-safe: open the Holo Lab diagnostic/help panel."""
+        self._win._holo_diag_sig.emit(str(symptom or ""))
+
+    def print_holo_blueprint(self):
+        """Thread-safe: open the OS printer dialog for the current blueprint."""
+        self._win._holo_print_sig.emit()
 
     def prompt_reconfig(self):
         """Thread-safe: show the API key setup overlay (e.g. after an auth error)."""
