@@ -633,9 +633,12 @@ class DashboardServer:
         clarity: int = 85,
         notes: str = "",
         components=None,
+        subject: str = "",
+        blueprint: str = "",
+        geometry=None,
     ) -> dict:
-        """Create one sanitized, session-scoped visual wearable prototype."""
-        allowed_models = {"glasses", "glove", "suit"}
+        """Create one sanitized, session-scoped visual prototype for any subject."""
+        allowed_models = {"glasses", "glove", "suit", "custom"}
         allowed_modes = {"holo", "wireframe", "exploded", "clear"}
         model = str(model or "glasses").lower().strip()
         mode = str(mode or "holo").lower().strip()
@@ -657,19 +660,66 @@ class DashboardServer:
             "glasses": ["OPTICAL CAMERA", "HUD LENS", "EDGE SENSOR", "TEMPLE COMPUTE + BATTERY"],
             "glove": ["PALM DISPLAY", "FINGER SENSORS", "WRIST CAMERA", "REMOVABLE POWER MODULE"],
             "suit": ["CHEST SENSOR CORE", "HEAD OPTICS", "MOTION SENSORS", "SERVICE PORT"],
+            "custom": ["AI GEOMETRY PRIMITIVES", "DISPLAY / PROJECTION CORE", "SENSOR ARRAY", "POWER + DATA MODULE"],
         }
         raw_components = components if isinstance(components, (list, tuple)) else []
-        clean_components = [_clean(item, 72, "COMPONENT") for item in raw_components[:12]]
+        clean_components = [_clean(item, 72, "COMPONENT") for item in raw_components[:16]]
         if not clean_components:
             clean_components = default_components[model]
+
+        def _number(value, fallback, low, high):
+            try:
+                number = float(value)
+            except (TypeError, ValueError):
+                number = fallback
+            return max(low, min(high, number))
+
+        primitive_types = {"box", "cylinder", "sphere", "ring", "line", "point", "cone", "plane"}
+        clean_geometry = []
+        if isinstance(geometry, (list, tuple)):
+            for raw in geometry[:32]:
+                if not isinstance(raw, dict):
+                    continue
+                kind = str(raw.get("type") or "box").lower().strip()
+                if kind not in primitive_types:
+                    continue
+                item = {
+                    "type": kind,
+                    "x": _number(raw.get("x"), 500, 0, 1000),
+                    "y": _number(raw.get("y"), 500, 0, 1000),
+                    "z": _number(raw.get("z"), 0, -500, 500),
+                    "w": _number(raw.get("w"), 140, 4, 700),
+                    "h": _number(raw.get("h"), 100, 4, 700),
+                    "d": _number(raw.get("d"), 70, 0, 500),
+                    "rotation": _number(raw.get("rotation"), 0, -180, 180),
+                    "label": _clean(raw.get("label"), 48, ""),
+                }
+                if kind == "line":
+                    item.update({
+                        "x2": _number(raw.get("x2"), item["x"] + item["w"], 0, 1000),
+                        "y2": _number(raw.get("y2"), item["y"] + item["h"], 0, 1000),
+                        "z2": _number(raw.get("z2"), item["z"], -500, 500),
+                    })
+                clean_geometry.append(item)
+        if model == "custom" and not clean_geometry:
+            clean_geometry = [
+                {"type": "ring", "x": 500, "y": 500, "z": 0, "w": 270, "h": 270, "d": 0, "rotation": 0, "label": "CORE FIELD"},
+                {"type": "box", "x": 500, "y": 500, "z": 20, "w": 170, "h": 120, "d": 90, "rotation": 0, "label": "AI CORE"},
+                {"type": "sphere", "x": 500, "y": 340, "z": 60, "w": 95, "h": 95, "d": 95, "rotation": 0, "label": "SENSOR"},
+            ]
+        clean_subject = _clean(subject, 120, "custom hologram object" if model == "custom" else "")
+        clean_blueprint = _clean(blueprint, 1200, "")
         project = {
             "id": "HOLO-" + secrets.token_hex(3).upper(),
-            "name": _clean(name, 64, "Untitled wearable prototype"),
+            "name": _clean(name, 64, "Untitled hologram prototype"),
             "model": model,
+            "subject": clean_subject,
             "mode": mode,
             "clarity": max(35, min(100, clarity)),
             "notes": _clean(notes, 600, ""),
+            "blueprint": clean_blueprint,
             "components": clean_components,
+            "geometry": clean_geometry,
             "created_at": int(time.time()),
         }
         self._holo_projects.append(project)
@@ -1035,6 +1085,9 @@ class DashboardServer:
                     clarity=body.get("clarity", 85),
                     notes=body.get("notes", ""),
                     components=body.get("components"),
+                    subject=body.get("subject", ""),
+                    blueprint=body.get("blueprint", ""),
+                    geometry=body.get("geometry"),
                 )
             except ValueError as exc:
                 return JSONResponse({"ok": False, "error": str(exc)}, status_code=400)

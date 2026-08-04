@@ -46,7 +46,7 @@ It's not just an assistant — it's an extension of your digital life.
 | 🧑‍💻 Silent Language Memory | Detects spoken language on first use — all future sessions adapt automatically |
 | 📱 Remote Dashboard | Control the assistant from your phone via QR code pairing |
 | 📷 Phone Camera Vision | EDITH-style scan from the phone camera — labels people, cars & plates on a live HUD, JARVIS answers by voice on PC **and** phone |
-| ◈ Holo Lab | Create a session-scoped holographic wearable prototype — smart glasses with camera, AR glove, or sensor suit; inspect it in HOLO / WIREFRAME / EXPLODED / CLEAR VIEW modes |
+| ◈ Holo Lab | Create a session-scoped hologram/blueprint for any object or scene — smart glasses, robot, vehicle, building, planet, or custom geometry; inspect it in HOLO / WIREFRAME / EXPLODED / CLEAR VIEW modes |
 | ⚡ Auto-Start on Boot | Registers with the OS startup system (registry / LaunchAgent / .desktop) |
 | 📋 Clipboard Intelligence | Copy any text → floating panel with Translate / Summarise / Explain / Fix |
 | 🎨 Assistant Customization | Change the assistant name and your name from the UI — takes effect immediately |
@@ -78,12 +78,13 @@ The Remote Dashboard now turns your phone into JARVIS's eyes, Spider-Man style:
 
 Open **◈ HOLO** in the Remote Dashboard — or open **◈ HOLO LAB / PC MONITOR** in the desktop settings drawer — to get a software holographic workbench inspired by sci-fi HUDs:
 
-1. Choose **Smart Optics** (glasses + camera), **AR Glove**, or **Field Suit**.
-2. Enter a project name and notes, then press **CREATE HOLOGRAM**. The server returns a session project ID such as `HOLO-A1B2C3` and mirrors the blueprint to the PC monitor.
-3. Inspect the animated concept in **HOLO**, **WIREFRAME**, **EXPLODED**, or **CLEAR VIEW** mode. The component list makes the camera, display, sensors, compute and power areas explicit.
-4. On the PC, the overlay draws an AI blueprint, component schedule, optical camera beam and animated hologram directly in the desktop window.
-5. Start the camera feed and press **SCAN SPACE** to reuse the EDITH detector on the test feed. **ASK JARVIS ABOUT VIEW** sends one selected frame to the existing vision session for a spoken explanation.
-6. You can also say or type *"create smart glasses with a camera and show the parts"*. The `holo_project` tool generates the component list, opens the PC Holo Lab automatically and mirrors the project to connected dashboards.
+1. Choose **Smart Optics** (glasses + camera), **AR Glove**, **Field Suit**, or **Custom / any object or scene**.
+2. For a custom design, type a subject such as *robot*, *car*, *house*, *spaceship*, *room*, *planet* or anything else. Press **ASK JARVIS TO DESIGN ANYTHING** and the AI generates the component schedule plus safe geometry primitives automatically.
+3. Press **CREATE HOLOGRAM** for an immediate visual prototype. The server returns a session project ID such as `HOLO-A1B2C3` and mirrors the blueprint to the PC monitor.
+4. Inspect the animated concept in **HOLO**, **WIREFRAME**, **EXPLODED**, or **CLEAR VIEW** mode. The PC renderer draws boxes, cylinders, spheres, rings, lines and other blueprint primitives into the hologram.
+5. On the PC, the overlay draws the AI blueprint, subject, component schedule, geometry and animated hologram directly in the desktop window.
+6. Start the camera feed and press **SCAN SPACE** to reuse the EDITH detector on the test feed. **ASK JARVIS ABOUT VIEW** sends one selected frame to the existing vision session for a spoken explanation.
+7. You can also say or type *"создай полностью любую голограмму автомобиля и покажи чертёж по частям"*. The `holo_project` tool generates the subject, component list and geometry, opens the PC Holo Lab automatically and mirrors the project to connected dashboards.
 
 This is an honest software prototype: it renders a hologram-style visualization on a phone/PC screen and can use a camera, but it cannot create a physical free-space hologram or switch on hardware by itself. Before building any real wearable, validate optics, heat, battery safety, fit, privacy and local regulations.
 

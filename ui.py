@@ -1143,11 +1143,13 @@ class HoloBlueprintCanvas(QWidget):
     _ALIASES = {
         "smart glasses": "glasses", "camera glasses": "glasses", "glass": "glasses",
         "ар очки": "glasses", "очки": "glasses", "перчатка": "glove", "костюм": "suit",
+        "any": "custom", "any object": "custom", "произвольный": "custom", "любой объект": "custom",
     }
     _DEFAULT_PARTS = {
         "glasses": ["OPTICAL CAMERA", "HUD LENS", "EDGE SENSOR", "TEMPLE COMPUTE + BATTERY"],
         "glove": ["PALM DISPLAY", "FINGER SENSORS", "WRIST CAMERA", "REMOVABLE POWER MODULE"],
         "suit": ["CHEST SENSOR CORE", "HEAD OPTICS", "MOTION SENSORS", "SERVICE PORT"],
+        "custom": ["AI GEOMETRY PRIMITIVES", "DISPLAY / PROJECTION CORE", "SENSOR ARRAY", "POWER + DATA MODULE"],
     }
 
     def __init__(self, parent=None):
@@ -1170,7 +1172,7 @@ class HoloBlueprintCanvas(QWidget):
     def _model_key(cls, value: str) -> str:
         raw = str(value or "glasses").lower().strip()
         raw = cls._ALIASES.get(raw, raw)
-        return raw if raw in ("glasses", "glove", "suit") else "glasses"
+        return raw if raw in ("glasses", "glove", "suit", "custom") else "custom"
 
     def set_project(self, project: dict | None):
         project = dict(project or {})
@@ -1181,15 +1183,26 @@ class HoloBlueprintCanvas(QWidget):
         components = project.get("components")
         if not isinstance(components, (list, tuple)) or not components:
             components = self._DEFAULT_PARTS[model]
-        components = [str(x).strip()[:38] for x in components[:12] if str(x).strip()]
+        components = [str(x).strip()[:38] for x in components[:16] if str(x).strip()]
+        try:
+            clarity = int(project.get("clarity") or 85)
+        except (TypeError, ValueError):
+            clarity = 85
+        geometry = project.get("geometry")
+        if not isinstance(geometry, (list, tuple)):
+            geometry = []
+        safe_geometry = [g for g in geometry[:32] if isinstance(g, dict)]
         self._project = {
             "id": str(project.get("id") or "PC-HOLO"),
-            "name": str(project.get("name") or "Untitled wearable prototype")[:64],
+            "name": str(project.get("name") or "Untitled hologram prototype")[:64],
+            "subject": str(project.get("subject") or "")[:120],
             "model": model,
             "mode": mode,
-            "clarity": max(35, min(100, int(project.get("clarity") or 85))),
+            "clarity": max(35, min(100, clarity)),
             "notes": str(project.get("notes") or "")[:600],
+            "blueprint": str(project.get("blueprint") or "")[:1200],
             "components": components or list(self._DEFAULT_PARTS[model]),
+            "geometry": safe_geometry,
         }
         self.update()
 
@@ -1353,6 +1366,101 @@ class HoloBlueprintCanvas(QWidget):
         self._text(p, "FIELD SUIT", cx - 42 * s, cy + 185 * s, 10, accent.name(), True)
         self._text(p, "SENSOR CORE / BLUEPRINT", cx - 86 * s, cy + 203 * s, 7, C.TEXT_DIM)
 
+    def _draw_custom(self, p: QPainter, cx: float, cy: float, s: float,
+                     accent: QColor, fill: QColor):
+        """Render AI-supplied geometry primitives for arbitrary holograms."""
+        geometry = list(self._project.get("geometry") or [])
+        if not geometry:
+            geometry = [
+                {"type": "ring", "x": 500, "y": 500, "z": 0, "w": 270, "h": 270, "label": "CORE FIELD"},
+                {"type": "box", "x": 500, "y": 500, "z": 20, "w": 170, "h": 120, "d": 90, "label": "AI CORE"},
+                {"type": "sphere", "x": 500, "y": 340, "z": 60, "w": 95, "h": 95, "d": 95, "label": "SENSOR"},
+            ]
+        wire = self._project.get("mode") == "wireframe"
+        exploded = self._project.get("mode") == "exploded"
+        subject = self._project.get("subject") or self._project.get("name") or "CUSTOM OBJECT"
+
+        def number(item, key, fallback=0.0):
+            try:
+                return float(item.get(key, fallback))
+            except (TypeError, ValueError, AttributeError):
+                return fallback
+
+        def point(item, suffix=""):
+            x = number(item, "x" + suffix, 500)
+            y = number(item, "y" + suffix, 500)
+            z = number(item, "z" + suffix, 0)
+            ex = ((index - (len(geometry) - 1) / 2) * 14) if exploded and not suffix else 0
+            return QPointF(
+                cx + (x - 500) * s * 0.52 + z * s * 0.13 + ex,
+                cy + (y - 500) * s * 0.38 - z * s * 0.10 - (abs(index - len(geometry) / 2) * 6 if exploded and not suffix else 0),
+            )
+
+        for index, item in enumerate(geometry[:32]):
+            if not isinstance(item, dict):
+                continue
+            kind = str(item.get("type") or "box").lower()
+            center = point(item)
+            px, py = center.x(), center.y()
+            ww = max(4.0, number(item, "w", 140) * s * 0.52)
+            hh = max(4.0, number(item, "h", 100) * s * 0.38)
+            dd = max(0.0, number(item, "d", 70) * s * 0.16)
+            rotation = number(item, "rotation", 0)
+            p.save()
+            p.translate(px, py)
+            if rotation:
+                p.rotate(rotation)
+            p.setPen(QPen(accent, 1.8 if kind not in ("point", "line") else 1.2))
+            p.setBrush(Qt.BrushStyle.NoBrush if wire else QBrush(fill))
+            if kind in ("box", "plane"):
+                rect = QRectF(-ww / 2, -hh / 2, ww, hh)
+                p.drawRect(rect)
+                if dd:
+                    p.drawRect(QRectF(-ww / 2 + dd, -hh / 2 - dd, ww, hh))
+                    p.drawLine(rect.topLeft(), QPointF(-ww / 2 + dd, -hh / 2 - dd))
+                    p.drawLine(rect.topRight(), QPointF(ww / 2 + dd, -hh / 2 - dd))
+                    p.drawLine(rect.bottomLeft(), QPointF(-ww / 2 + dd, hh / 2 - dd))
+                    p.drawLine(rect.bottomRight(), QPointF(ww / 2 + dd, hh / 2 - dd))
+            elif kind == "cylinder":
+                p.drawEllipse(QPointF(0, -hh / 2), ww / 2, hh * 0.18)
+                p.drawEllipse(QPointF(0, hh / 2), ww / 2, hh * 0.18)
+                p.drawLine(QPointF(-ww / 2, -hh / 2), QPointF(-ww / 2, hh / 2))
+                p.drawLine(QPointF(ww / 2, -hh / 2), QPointF(ww / 2, hh / 2))
+            elif kind == "sphere":
+                radius = min(ww, hh) / 2
+                p.drawEllipse(QPointF(0, 0), radius, radius)
+                p.drawEllipse(QPointF(0, 0), radius * .55, radius)
+                p.drawEllipse(QPointF(0, 0), radius, radius * .55)
+            elif kind == "ring":
+                p.setBrush(Qt.BrushStyle.NoBrush)
+                p.drawEllipse(QPointF(0, 0), ww / 2, hh / 2)
+                p.drawEllipse(QPointF(0, 0), ww * .38, hh * .38)
+            elif kind == "cone":
+                path = QPainterPath()
+                path.moveTo(QPointF(0, -hh / 2))
+                path.lineTo(QPointF(-ww / 2, hh / 2))
+                path.lineTo(QPointF(ww / 2, hh / 2))
+                path.closeSubpath()
+                p.drawPath(path)
+                p.drawEllipse(QPointF(0, hh / 2), ww / 2, hh * .16)
+            elif kind == "line":
+                p.setBrush(Qt.BrushStyle.NoBrush)
+                endpoint = point(item, "2")
+                p.drawLine(QPointF(0, 0), QPointF(endpoint.x() - center.x(), endpoint.y() - center.y()))
+            else:  # point and unknown safe fallback
+                p.setBrush(QBrush(QColor(C.ACC2)))
+                p.drawEllipse(QPointF(0, 0), 5 * s, 5 * s)
+            p.restore()
+            label = str(item.get("label") or "").strip()[:38]
+            if label:
+                self._leader(p, px, py, min(self.width() - 150, px + 56 * s), py - 24 * s, label, accent)
+
+        pulse = (math.sin(self._phase) + 1.0) * 0.5
+        self._ring(p, cx, cy + 24 * s, (170 + pulse * 24) * s, qcol(accent.name(), 84))
+        self._ring(p, cx, cy + 24 * s, 115 * s, qcol(accent.name(), 50), True)
+        self._text(p, "CUSTOM HOLOGRAM", cx - 72 * s, cy + 150 * s, 10, accent.name(), True)
+        self._text(p, str(subject).upper()[:42], cx - 120 * s, cy + 168 * s, 7, C.TEXT_DIM)
+
     def paintEvent(self, _event):
         w, h = self.width(), self.height()
         p = QPainter(self)
@@ -1363,6 +1471,9 @@ class HoloBlueprintCanvas(QWidget):
             self._text(p, "PC HOLO OUTPUT  //  AI-GENERATED BLUEPRINT", 16, 22, 8, accent.name(), True)
             self._text(p, f"ID {self._project.get('id', 'PC-HOLO')}", max(16, w - 132), 22, 7, C.TEXT_DIM)
             self._text(p, f"MODE {str(self._project.get('mode', 'holo')).upper()}", 16, 40, 7, C.TEXT_DIM)
+            subject = str(self._project.get("subject") or self._project.get("name") or "")
+            if subject:
+                self._text(p, "SUBJECT " + subject.upper()[:52], 16, 56, 7, C.TEXT_MED)
             self._text(p, f"CLARITY {self._project.get('clarity', 85)}%", max(16, w - 106), 40, 7, C.TEXT_DIM)
             cx, cy = w * 0.48, h * 0.43
             s = max(0.45, min(1.05, min(w / 650.0, h / 430.0)))
@@ -1371,6 +1482,8 @@ class HoloBlueprintCanvas(QWidget):
                 self._draw_glove(p, cx, cy, s, accent, fill)
             elif model == "suit":
                 self._draw_suit(p, cx, cy, s, accent, fill)
+            elif model == "custom":
+                self._draw_custom(p, cx, cy, s, accent, fill)
             else:
                 self._draw_glasses(p, cx, cy, s, accent, fill)
             # AI's component list is the lower blueprint strip.
@@ -1400,6 +1513,7 @@ class HoloLabOverlay(QWidget):
         ("SMART OPTICS / CAMERA GLASSES", "glasses"),
         ("AR GLOVE / GESTURE INTERFACE", "glove"),
         ("FIELD SUIT / SENSOR CORE", "suit"),
+        ("CUSTOM / ANY HOLOGRAM", "custom"),
     )
     _MODES = (("HOLO", "holo"), ("WIREFRAME", "wireframe"),
               ("EXPLODED / BY PARTS", "exploded"), ("CLEAR VIEW", "clear"))
@@ -1471,6 +1585,11 @@ class HoloLabOverlay(QWidget):
             self._model.addItem(text, key)
         self._model.setFixedHeight(29)
         pl.addWidget(self._model)
+        pl.addWidget(_lbl("ANY SUBJECT / OBJECT", C.TEXT_DIM))
+        self._subject = QLineEdit()
+        self._subject.setPlaceholderText("robot, car, house, planet, anything…")
+        self._subject.setFixedHeight(29)
+        pl.addWidget(self._subject)
         pl.addWidget(_lbl("DISPLAY / PRESENTATION", C.TEXT_DIM))
         self._mode = QComboBox()
         for text, key in self._MODES:
@@ -1518,10 +1637,12 @@ class HoloLabOverlay(QWidget):
     def _generate_local(self):
         model = self._model.currentData() or "glasses"
         mode = self._mode.currentData() or "holo"
+        subject = self._subject.text().strip() or ("custom hologram object" if model == "custom" else "")
         self.set_project({
             "id": "PC-" + time.strftime("%H%M%S"),
-            "name": self._name.text().strip() or "PC wearable prototype",
+            "name": self._name.text().strip() or (subject[:48] if model == "custom" else "PC wearable prototype"),
             "model": model,
+            "subject": subject,
             "mode": mode,
             "clarity": 90,
             "notes": self._notes.toPlainText().strip(),
@@ -1540,6 +1661,7 @@ class HoloLabOverlay(QWidget):
         if mode_idx >= 0:
             self._mode.setCurrentIndex(mode_idx)
         self._name.setText(str(p.get("name") or "PC wearable prototype")[:64])
+        self._subject.setText(str(p.get("subject") or "")[:120])
         self._notes.setPlainText(str(p.get("notes") or "")[:600])
         self._canvas.set_project(p)
         current = self._canvas.project()
@@ -4298,6 +4420,7 @@ class MainWindow(QMainWindow):
             "id": "PC-HOLO",
             "name": "Smart Optics / PC prototype",
             "model": "glasses",
+            "subject": "smart glasses with camera",
             "mode": "holo",
             "clarity": 90,
             "notes": "Camera input, transparent HUD lens, motion sensor and removable compute/power module.",

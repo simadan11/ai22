@@ -592,12 +592,16 @@
             <option value="glasses">SMART OPTICS / glasses + camera</option>
             <option value="glove">AR GLOVE / gesture interface</option>
             <option value="suit">FIELD SUIT / sensor core</option>
+            <option value="custom">CUSTOM / any object or scene</option>
           </select>
+          <label class="holo-label" for="holo-subject">ANY SUBJECT / OBJECT</label>
+          <input class="holo-input" id="holo-subject" maxlength="120" placeholder="robot, car, house, planet, anything…">
           <label class="holo-label" for="holo-project-name">PROJECT NAME</label>
           <input class="holo-input" id="holo-project-name" maxlength="64" placeholder="e.g. ARA-01 optics">
           <label class="holo-label" for="holo-notes">BUILD NOTES</label>
           <textarea class="holo-notes" id="holo-notes" maxlength="600" placeholder="What should this prototype help you see or measure?"></textarea>
           <button class="holo-btn primary" onclick="createHoloProject()">▸ CREATE HOLOGRAM</button>
+          <button class="holo-btn" onclick="askJarvisHoloDesign()">✦ ASK JARVIS TO DESIGN ANYTHING</button>
           <p class="holo-hint">Creates a clear, animated concept view and a session project ID. It is a visual prototype — not a physical hologram or a hardware controller.</p>
 
           <div class="holo-section-title" style="margin-top:16px">02 / DISPLAY MODE</div>
@@ -721,8 +725,15 @@
       if (m.type === 'holo_project' && m.project) {
         const chip = document.getElementById('holo-project-chip');
         if (chip) chip.textContent = String(m.project.id || 'HOLO PROJECT');
+        const modelSelect = document.getElementById('holo-model-select');
+        if (modelSelect && ['glasses', 'glove', 'suit', 'custom'].includes(m.project.model)) {
+          modelSelect.value = m.project.model;
+        }
+        const subjectInput = document.getElementById('holo-subject');
+        if (subjectInput && m.project.subject) subjectInput.value = String(m.project.subject).slice(0, 120);
         if (holoOverlay.classList.contains('open')) {
-          holoStageStatus.textContent = String(m.project.name || 'HOLO PROJECT').toUpperCase() + ' / SYNCED';
+          renderHoloModel();
+          holoStageStatus.textContent = String(m.project.subject || m.project.name || 'HOLO PROJECT').toUpperCase() + ' / SYNCED';
           holoReadoutStatus.textContent = 'SYNCED';
         }
       }
@@ -1646,6 +1657,23 @@
           <path class="h-beam" d="M300 222 V300 M234 173 H186 M366 173 H414"/><text class="h-caption" x="218" y="353">SENTINEL / CONCEPT</text>
         </svg>`
       },
+      custom: {
+        name: 'CUSTOM OBJECT', type: 'AI GENERATED GEOMETRY',
+        parts: [
+          { name: 'AI GEOMETRY', detail: 'shape primitives from the design brief', x: 70, y: 28 },
+          { name: 'DISPLAY CORE', detail: 'hologram rendering layer', x: 38, y: 48 },
+          { name: 'SENSOR ARRAY', detail: 'optional camera and environment input', x: 66, y: 68 },
+          { name: 'POWER / DATA', detail: 'safe conceptual module', x: 36, y: 80 },
+        ],
+        svg: `<svg class="holo-svg" viewBox="0 0 600 400" role="img" aria-label="Custom AI hologram">
+          <g class="h-part h-core"><circle class="h-core" cx="300" cy="190" r="58"/><circle cx="300" cy="190" r="31" fill="#dffcff"/><circle cx="300" cy="190" r="12" fill="#22d3ee"/></g>
+          <g class="h-part h-display"><rect class="h-display" x="215" y="112" width="170" height="156" rx="12"/><path class="h-beam" d="M240 150 H360 M240 170 H330 M240 190 H350"/></g>
+          <g class="h-part h-sensor"><circle class="h-sensor" cx="184" cy="190" r="11"/><circle class="h-sensor" cx="416" cy="190" r="11"/><circle class="h-sensor" cx="300" cy="72" r="11"/></g>
+          <path class="h-beam" d="M184 190 L118 130 M416 190 L484 130 M300 72 V28 M300 248 V350"/>
+          <ellipse class="h-beam" cx="300" cy="190" rx="178" ry="68"/><ellipse class="h-beam" cx="300" cy="190" rx="125" ry="45"/>
+          <text class="h-caption" x="226" y="315">ANY OBJECT / SCENE</text><text class="h-subcaption" x="205" y="333">AI GEOMETRY / CONCEPT</text>
+        </svg>`
+      },
     };
     let _holoMode = 'holo';
     let _holoStream = null;
@@ -1667,6 +1695,10 @@
       holoOverlay.classList.add('open');
       if (!document.getElementById('holo-project-name').value.trim()) {
         document.getElementById('holo-project-name').value = _HOLO_MODELS.glasses.name + ' prototype';
+      }
+      if (!document.getElementById('holo-subject').value.trim()) {
+        document.getElementById('holo-subject').value = document.getElementById('holo-model-select').value === 'custom'
+          ? 'custom hologram object' : 'smart glasses with camera';
       }
       renderHoloModel();
       holoStageStatus.textContent = 'HOLO READY / SELECT A PROTOTYPE';
@@ -1698,7 +1730,8 @@
         const desc = document.createElement('i'); desc.textContent = part.detail;
         label.append(title, desc); holoCallouts.appendChild(label);
       });
-      holoStageStatus.textContent = model.name + ' / ' + model.type;
+      const subject = document.getElementById('holo-subject').value.trim();
+      holoStageStatus.textContent = (key === 'custom' && subject ? subject.toUpperCase() : model.name) + ' / ' + model.type;
       holoReadoutStatus.textContent = 'READY';
       setHoloMode(_holoMode);
       setHoloClarity(document.getElementById('holo-clarity').value);
@@ -1725,10 +1758,11 @@
 
     async function createHoloProject() {
       const model = document.getElementById('holo-model-select').value;
-      const name = document.getElementById('holo-project-name').value.trim() || _HOLO_MODELS[model].name + ' prototype';
+      const subject = document.getElementById('holo-subject').value.trim() || (model === 'custom' ? 'custom hologram object' : _HOLO_MODELS[model].name);
+      const name = document.getElementById('holo-project-name').value.trim() || subject.slice(0, 64);
       const notes = document.getElementById('holo-notes').value.trim();
       const clarity = Number(document.getElementById('holo-clarity').value) || 85;
-      const payload = { name, model, mode: _holoMode, clarity, notes };
+      const payload = { name, model, subject, mode: _holoMode, clarity, notes };
       holoReadoutStatus.textContent = 'SAVING…';
       try {
         const response = await _authFetch('/api/holo-project', {
@@ -1751,6 +1785,30 @@
         document.getElementById('holo-foot-status').textContent = 'LOCAL PROTOTYPE / SERVER OFFLINE';
         holoStageStatus.textContent = 'VISUAL PROTOTYPE READY / SERVER UNAVAILABLE';
         toast('Hologram view ready locally');
+      }
+    }
+
+    async function askJarvisHoloDesign() {
+      const model = document.getElementById('holo-model-select').value;
+      const subject = document.getElementById('holo-subject').value.trim() || 'any object or scene';
+      const notes = document.getElementById('holo-notes').value.trim();
+      const mode = _holoMode === 'holo' ? 'exploded' : _holoMode;
+      const text = `Create a complete custom hologram and AI blueprint for: ${subject}. ` +
+        `Use holo_project exactly once with prototype='${model === 'custom' ? 'custom' : model}', ` +
+        `subject='${subject}', display_mode='${mode}'. Generate safe geometry primitives, ` +
+        `3-16 component names, and a concise blueprint. Additional brief: ${notes || 'none'}. ` +
+        `Show the result on the PC monitor and connected dashboard.`;
+      holoStageStatus.textContent = 'REQUEST SENT TO JARVIS / AI DESIGN INCOMING';
+      const enc = _encrypt(text);
+      try {
+        await _authFetch('/api/command', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(enc ? { enc } : { text }),
+        });
+        toast('✦ JARVIS is designing the hologram');
+      } catch (_) {
+        holoStageStatus.textContent = 'AI DESIGN UPLINK FAILED';
       }
     }
 
