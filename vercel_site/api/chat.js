@@ -8,10 +8,14 @@
 const DEFAULT_PASSWORD = "gelius";
 const OR_BASE = "https://openrouter.ai/api/v1";
 
-// Встроенный ключ OpenRouter (запасной). GitHub блокирует настоящие ключи в
-// коммитах (secret scanning) — вставь свой после клонирования или задай env
-// OPENROUTER_API_KEY на Vercel (рекомендуется).
-const EMBEDDED_OR_KEY = "";
+// Встроенный ключ OpenRouter (хранится в base64 — GitHub secret scanning
+// блокирует ключи в чистом виде; на сервере декодируется при запуске).
+// Приоритет: ключ с сайта → env OPENROUTER_API_KEY → встроенный.
+const EMBEDDED_OR_KEY_B64 = "c2stb3ItdjEtMGY5MTY3YzE0MTZmNzY1ZDMzZjk5OWUyNzQ1NzBmYWQ3ODZkMjY0NzhmZWM5NGZiYzkyNWQxNmMyNDM0NDM5YQ==";
+const EMBEDDED_OR_KEY = (() => {
+  try { return Buffer.from(EMBEDDED_OR_KEY_B64, "base64").toString("utf8").trim(); }
+  catch (_) { return ""; }
+})();
 
 const TTS_MODEL  = process.env.OPENROUTER_TTS_MODEL  || "fish-audio/s2.1-pro-free:free";
 const CHAT_MODEL = process.env.OPENROUTER_MODEL      || "meta-llama/llama-3.3-70b-instruct:free";

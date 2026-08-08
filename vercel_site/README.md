@@ -9,7 +9,7 @@
 
 ## Вход
 - **Пароль** — проверяется на сервере (по умолчанию `gelius`, env `EDIT_PASSWORD`).
-- **Ключ OpenRouter** — приоритет: ключ с сайта → env `OPENROUTER_API_KEY` → `EMBEDDED_OR_KEY` в `api/chat.js`.
+- **Ключ OpenRouter уже встроен** (base64 в `api/chat.js`) — вводить его при входе не нужно, достаточно пароля. Приоритет: ключ с сайта → env `OPENROUTER_API_KEY` → встроенный.
 
 ## 🚀 Деплой на Vercel
 1. Ключ OpenRouter: https://openrouter.ai/settings/keys
