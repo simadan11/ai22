@@ -9,5 +9,7 @@
     "tts_engine": "edgetts",
     "tts_voice": "ru-RU-DmitryNeural",
     "tts_speed": 1.0,
-    "tts_jarvis_voice": "ru-RU-DmitryNeural"
+    "tts_jarvis_voice": "ru-RU-DmitryNeural",
+    "internet_tunnel": false,
+    "tunnel_static_url": ""
 }

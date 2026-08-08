@@ -92,6 +92,7 @@ from actions.background_monitor import (
     add_monitor, remove_monitor, list_monitors, check_all as monitor_check_all,
 )
 from actions.headphones import HeadphonesManager
+from actions.tunnel import TunnelManager
 from actions.web_search        import _news as _fetch_news_sync
 from memory.config_manager     import get_brief_enabled
 from core.model_router         import print_model_status, is_local_mode
@@ -726,6 +727,33 @@ TOOL_DECLARATIONS = [
         }
     },
     {
+        "name": "internet_access",
+        "description": (
+            "Toggles a public HTTPS tunnel (Cloudflare/ngrok) so EDIT's Remote "
+            "Dashboard is reachable from the phone over MOBILE DATA when there "
+            "is no WiFi (e.g. away from home). Provides an internet URL like "
+            "https://xxx.trycloudflare.com with the same dashboard: headphones "
+            "mode 🎧, voice, EDITH camera. Call when the user says: интернет "
+            "доступ, доступ через интернет, мобильный интернет, туннель, "
+            "чтобы работало не дома, internet access, tunnel, remote from "
+            "anywhere, etc."
+        ),
+        "parameters": {
+            "type": "OBJECT",
+            "properties": {
+                "enabled": {
+                    "type": "BOOLEAN",
+                    "description": "True to start the tunnel, false to stop it. Omit to toggle."
+                },
+                "status_only": {
+                    "type": "BOOLEAN",
+                    "description": "True to only report the current status (no change)."
+                }
+            },
+            "required": []
+        }
+    },
+    {
     "name": "file_processor",
     "description": (
         "Processes any file that the user has uploaded or dropped onto the interface. "
@@ -1162,6 +1190,12 @@ class JarvisLive:
         # streamed to the phone's headphones — exactly one voice.
         self._pc_tts       = None          # local PC TTS bridge (optional mode)
         self._jarvis_tts   = None          # Jarvis voice streaming bridge (phone)
+
+        # ── Internet tunnel (🌐) — access EDIT over mobile data ────────────
+        self._tunnel      = TunnelManager(
+            port=8000, static_url=TunnelManager.static_url()
+        )
+        self.ui.on_internet_toggle = self._ui_toggle_internet
         self._dashboard     = None
         self._briefing_sent    = False          # morning briefing fires once per process
         self._sys_monitor      = SystemMonitor()  # persistent cooldown state
@@ -1475,6 +1509,62 @@ class JarvisLive:
                 )
             except Exception:
                 pass
+
+    # ── Internet tunnel (🌐) — EDIT from anywhere over mobile data ─────────
+
+    def _ui_toggle_internet(self) -> None:
+        """Called from the Qt thread when the 🌐 button is pressed."""
+        if not self._loop:
+            return
+        try:
+            asyncio.run_coroutine_threadsafe(
+                self._internet_toggle_task(), self._loop
+            )
+        except Exception as e:
+            print(f"[Tunnel] UI toggle error: {e}")
+
+    async def _internet_toggle_task(self, enabled: bool | None = None) -> dict:
+        """Start/stop the public tunnel and push the status everywhere."""
+        try:
+            if enabled is None:
+                enabled = not self._tunnel.active
+            if enabled:
+                st = await asyncio.to_thread(self._tunnel.start, 35.0)
+                if st.get("error") == "no_tunnel_binary":
+                    self.ui.write_log("🌐 Tunnel engine missing — see log for install steps")
+                    self.ui.show_content(
+                        "🌐 INTERNET ACCESS — install tunnel",
+                        st.get("hint", ""),
+                    )
+                    return st
+                TunnelManager.set_enabled(True)
+                url = st.get("url") or ""
+                if url:
+                    self.ui.write_log(f"🌐 INTERNET ACCESS: {url}")
+                    self.ui.show_content(
+                        "🌐 INTERNET ACCESS — EDIT (мобильный интернет)",
+                        f"{url}\n\nОткрой этот адрес на телефоне — тот же Remote "
+                        "Dashboard, режим наушников 🎧 и всё остальное работают "
+                        "через мобильный интернет. Первый вход: PIN из "
+                        "Remote Control (телефон с запомненным токеном входит сам).",
+                    )
+                else:
+                    self.ui.write_log("🌐 Tunnel started but URL not ready yet")
+            else:
+                await asyncio.to_thread(self._tunnel.stop)
+                TunnelManager.set_enabled(False)
+                self.ui.write_log("🌐 INTERNET ACCESS: OFF")
+            self.ui.update_internet_btn(self._tunnel.status())
+            return self._tunnel.status()
+        except Exception as e:
+            print(f"[Tunnel] Error: {e}")
+            traceback.print_exc()
+            return self._tunnel.status()
+
+    def _maybe_start_internet_tunnel(self) -> None:
+        """Auto-start the public tunnel at boot if enabled in the config."""
+        if TunnelManager.enabled() and not self._tunnel.active:
+            asyncio.create_task(self._internet_toggle_task(True))
 
     # ── TTS voice module — the AI does not speak, this module does ─────────
 
@@ -1990,6 +2080,28 @@ class JarvisLive:
                             "TTS voice module is OFF — the AI speaks directly "
                             "from now on."
                         )
+
+            elif name == "internet_access":
+                if args.get("status_only"):
+                    st = self._tunnel.status()
+                else:
+                    st = await self._internet_toggle_task(
+                        bool(args.get("enabled", not self._tunnel.active))
+                    )
+                if st.get("active") or st.get("url"):
+                    result = (
+                        "Internet access is ON. Open this address on your phone "
+                        "to use EDIT from anywhere, even on mobile data without "
+                        f"WiFi: {st.get('url') or ''}"
+                    )
+                elif st.get("error") == "no_tunnel_binary":
+                    result = (
+                        "Internet tunnel needs a tunnel program installed on the "
+                        "PC: Cloudflare (cloudflared) or ngrok. See the on-screen "
+                        "instructions."
+                    )
+                else:
+                    result = "Internet access is OFF — EDIT is reachable only on the local network."
 
             else:
                 from actions.self_improve import is_custom_skill, run_custom_skill
@@ -2900,6 +3012,9 @@ class JarvisLive:
         # routing is active before the first session connects
         if self._load_headphones_pref():
             asyncio.create_task(self._headphones_toggle_task(True))
+
+        # Internet tunnel — auto-start if enabled (access over mobile data)
+        self._maybe_start_internet_tunnel()
 
         while True:
             try:

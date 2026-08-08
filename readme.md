@@ -54,6 +54,28 @@ It's not just an assistant — it's an extension of your digital life.
 
 ---
 
+## 🌐 Internet Access — use EDIT from anywhere over mobile data (no WiFi)
+
+When you leave home there is no WiFi, so the local address `192.168.x.x:8000` is unreachable. EDIT can open a **public HTTPS tunnel** (Cloudflare quick tunnel or ngrok) that gives you an internet URL — open it on your phone over **mobile data** and the same Remote Dashboard works: headphones mode 🎧, voice channel, EDITH camera.
+
+### How to use
+1. **Install a tunnel engine on the PC** (one time):
+   - Cloudflare (recommended, free, no account):
+     - Windows: `winget install cloudflare.cloudflared` (or download `cloudflared.exe` from the releases page),
+     - macOS: `brew install cloudflared`,
+     - Linux: `sudo apt install cloudflared`.
+   - or ngrok: https://ngrok.com/download
+2. In EDIT press **🌐 INTERNET ACCESS** in the settings drawer (⚙️), or say *«включи интернет доступ»* / *«internet access on»*.
+3. EDIT shows the internet URL (e.g. `https://xxxx.trycloudflare.com`) on the content panel and in the log.
+4. Open that URL on the phone — even on mobile data, away from home. A phone that already paired at home (device token) enters automatically; a new phone needs the PIN from Remote Control.
+
+To turn it off: press **🌐** again or say *«выключи интернет доступ»*. The mode can auto-start with EDIT (`internet_tunnel: true` in `config/api_keys.json`).
+
+> 🔒 The tunnel URL is random on every start (quick tunnels). For a **permanent** address, create a free Cloudflare account, set up a named tunnel, and put your stable URL in `config/api_keys.json` → `tunnel_static_url`. Auth still applies (PIN / paired device token), and API/WS traffic is never cached by the service worker.
+> 📶 Voice over mobile data works but latency is higher than on LAN — fine for commands, slightly delayed for back-and-forth conversation.
+
+---
+
 ## 📲 Install EDIT on your phone as an app (PWA)
 
 The Remote Dashboard is an installable web app (PWA) — you get an icon on the home screen, a full-screen window and a faster start, so the assistant feels like a real app on the phone.
