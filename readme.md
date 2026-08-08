@@ -46,6 +46,7 @@ It's not just an assistant — it's an extension of your digital life.
 | 🧑‍💻 Silent Language Memory | Detects spoken language on first use — all future sessions adapt automatically |
 | 📱 Remote Dashboard | Control the assistant from your phone via QR code pairing |
 | 📷 Phone Camera Vision | EDITH-style scan from the phone camera — labels people, cars & plates on a live HUD, JARVIS answers by voice on PC **and** phone |
+| ◈ Holo Lab | Create any hologram/blueprint, assemble a buy/make BOM, run diagnostics and print a build report — smart glasses, robot, vehicle, building, planet or custom geometry |
 | ⚡ Auto-Start on Boot | Registers with the OS startup system (registry / LaunchAgent / .desktop) |
 | 📋 Clipboard Intelligence | Copy any text → floating panel with Translate / Summarise / Explain / Fix |
 | 🎨 Assistant Customization | Change the assistant name and your name from the UI — takes effect immediately |
@@ -72,6 +73,24 @@ The Remote Dashboard now turns your phone into JARVIS's eyes, Spider-Man style:
 > 🔊 **Voice notes:** JARVIS speaks on PC and phone simultaneously; if both are in the same room and you hear an echo, tap 🔇 on the phone or use headphones. While JARVIS's voice plays on the phone speaker, the phone mic is briefly suppressed so JARVIS never hears himself (that echo is what used to interrupt answers).
 
 > ⚠️ **Privacy by design:** people are described by appearance/clothing/pose only — the AI never identifies real people and never looks anyone up. License plates are transcribed as visible text only; there is intentionally **no owner lookup**. Camera access on `http://` origins needs the same one-time Chrome flag as the microphone (the app shows setup instructions automatically on first tap).
+
+## ◈ Holo Lab — wearable / smart-glasses prototype
+
+Open **◈ HOLO** in the Remote Dashboard — or open **◈ HOLO LAB / PC MONITOR** in the desktop settings drawer — to get a software holographic workbench inspired by sci-fi HUDs:
+
+1. Choose **Smart Optics** (glasses + camera), **AR Glove**, **Field Suit**, or **Custom / any object or scene**.
+2. For a custom design, type a subject such as *robot*, *car*, *house*, *spaceship*, *room*, *planet* or anything else. Press **ASK JARVIS TO DESIGN ANYTHING** and the AI generates the component schedule plus safe geometry primitives automatically.
+3. Press **CREATE HOLOGRAM** for an immediate visual prototype. The server returns a session project ID such as `HOLO-A1B2C3` and mirrors the blueprint to the PC monitor.
+4. Inspect the animated concept in **HOLO**, **WIREFRAME**, **EXPLODED**, or **CLEAR VIEW** mode. The PC renderer draws boxes, cylinders, spheres, rings, lines and other blueprint primitives into the hologram.
+5. On the PC, the overlay draws the AI blueprint, subject, component schedule, geometry and animated hologram directly in the desktop window.
+6. Start the camera feed and press **SCAN SPACE** to reuse the EDITH detector on the test feed. **ASK JARVIS ABOUT VIEW** sends one selected frame to the existing vision session for a spoken explanation.
+7. In the PC Holo Lab, open **PARTS CATALOG / BUILD** to select a BOM from a broad offline catalog of parts that can be bought or made: controllers, cameras, displays, optics, batteries, chargers, regulators, sensors, 3-D printed enclosures, PCB parts, test instruments and safety equipment.
+8. Open **ASSEMBLY EDITOR / PLACE PARTS** to add BOM parts into the scene, drag them in the viewport like a simple Blender assembly view, edit X/Y/Z, rotation and scale, snap to a grid, remove parts, and save/load the project as JSON.
+9. Press **RUN DIAGNOSTICS / HELP** when something fails. It checks missing controller/power/protection/display/camera/thermal/test parts and gives a problem, fix and next bench test. You can also say *"камера не работает"*, *"экран чёрный"*, *"батарея греется"* or *"почему перезагружается"*.
+10. Press **PRINT BLUEPRINT** to open the system printer dialog and print the blueprint, AI component schedule, buy/make BOM and diagnostics. You can also say *"распечатай схему голограммы"*.
+11. You can also say or type *"создай полностью любую голограмму автомобиля и покажи чертёж по частям"*. The `holo_project` tool generates the subject, component list, geometry and suggested parts, opens the PC Holo Lab automatically and mirrors the project to connected dashboards.
+
+This is an honest software prototype: it renders a hologram-style visualization on a phone/PC screen and can use a camera, but it cannot create a physical free-space hologram or switch on hardware by itself. Before building any real wearable, validate optics, heat, battery safety, fit, privacy and local regulations.
 
 ---
 

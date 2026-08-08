@@ -312,6 +312,85 @@ TOOL_DECLARATIONS = [
         }
     },
     {
+        "name": "holo_project",
+        "description": (
+            "Creates any safe visual hologram and blueprint in the Holo Lab. "
+            "Use for smart glasses, an AR glove, a sensor suit, a robot, vehicle, building, "
+            "machine, room, landscape, product, creature, or any other object/scene. "
+            "For anything beyond the built-in wearables use prototype='custom', describe the subject, "
+            "and generate geometry primitives so the PC can draw the shape. This is a visual record only; "
+            "it does not manufacture hardware, control weapons, or create a physical hologram."
+        ),
+        "parameters": {
+            "type": "OBJECT",
+            "properties": {
+                "prototype": {
+                    "type": "STRING",
+                    "description": "glasses | glove | suit | custom. Use custom for any arbitrary object or scene."
+                },
+                "subject": {"type": "STRING", "description": "What to holograph: e.g. red sports car, robot arm, house, planet"},
+                "project_name": {"type": "STRING", "description": "Short name for the concept"},
+                "display_mode": {"type": "STRING", "description": "holo | wireframe | exploded | clear"},
+                "notes": {"type": "STRING", "description": "What it should look like or do"},
+                "blueprint": {"type": "STRING", "description": "AI-generated concise construction/shape brief"},
+                "components": {"type": "ARRAY", "items": {"type": "STRING"}, "description": "3-16 AI-generated component names for the blueprint"},
+                "parts": {"type": "ARRAY", "items": {"type": "STRING"}, "description": "Catalog part IDs to buy, make or test"},
+                "geometry": {
+                    "type": "ARRAY",
+                    "description": "3-32 safe drawing primitives. Coordinates x/y are 0-1000, z is -500..500. Types: box, cylinder, sphere, ring, line, point, cone, plane.",
+                    "items": {
+                        "type": "OBJECT",
+                        "properties": {
+                            "type": {"type": "STRING", "description": "box | cylinder | sphere | ring | line | point | cone | plane"},
+                            "x": {"type": "NUMBER", "description": "center x, 0-1000"},
+                            "y": {"type": "NUMBER", "description": "center y, 0-1000"},
+                            "z": {"type": "NUMBER", "description": "depth, -500..500"},
+                            "w": {"type": "NUMBER", "description": "width or radius, 4-700"},
+                            "h": {"type": "NUMBER", "description": "height or radius, 4-700"},
+                            "d": {"type": "NUMBER", "description": "depth, 0-500"},
+                            "x2": {"type": "NUMBER", "description": "line endpoint x"},
+                            "y2": {"type": "NUMBER", "description": "line endpoint y"},
+                            "z2": {"type": "NUMBER", "description": "line endpoint z"},
+                            "rotation": {"type": "NUMBER", "description": "rotation in degrees"},
+                            "scale": {"type": "NUMBER", "description": "visual scale 0.05-10"},
+                            "mm_w": {"type": "NUMBER", "description": "approximate real width in millimeters; verify datasheet"},
+                            "mm_h": {"type": "NUMBER", "description": "approximate real height in millimeters; verify datasheet"},
+                            "mm_d": {"type": "NUMBER", "description": "approximate real depth in millimeters; verify datasheet"},
+                            "part_id": {"type": "STRING", "description": "catalog part ID if this primitive represents a selected part"},
+                            "label": {"type": "STRING", "description": "short part label"},
+                        },
+                        "required": ["type", "x", "y"]
+                    }
+                },
+                "clarity": {"type": "INTEGER", "description": "Visual contrast from 35 to 100"},
+            },
+            "required": ["prototype"]
+        }
+    },
+    {
+        "name": "holo_diagnose",
+        "description": (
+            "Diagnoses a Holo Lab build or prototype when the user says it does not work. "
+            "Give the symptom and return likely problems, fixes and safe bench tests; never tell the user to bypass battery protection."
+        ),
+        "parameters": {
+            "type": "OBJECT",
+            "properties": {
+                "symptom": {"type": "STRING", "description": "What is wrong: black screen, camera, heat, reset, battery, Wi-Fi, printer, etc."},
+                "parts": {"type": "ARRAY", "items": {"type": "STRING"}, "description": "Optional catalog part IDs in the build"},
+            },
+            "required": ["symptom"]
+        }
+    },
+    {
+        "name": "print_holo_blueprint",
+        "description": (
+            "Prints the current Holo Lab blueprint, AI component schedule, selected buy/make BOM and diagnostics using the PC printer dialog. "
+            "Use when the user explicitly asks to print the hologram scheme or blueprint."
+        ),
+        "parameters": {"type": "OBJECT", "properties": {}, "required": []}
+    },
+    {
         "name": "remember_face",
         "description": (
             "Learns the face currently visible on the live phone camera and "
@@ -1040,7 +1119,89 @@ class JarvisLive:
                         f"Do NOT describe or guess content — the actual image arrives in the NEXT message."
                     )
 
+            elif name == "holo_project":
+                # Voice/text command → create the same safe visual prototype
+                # that the dashboard's HOLO button creates.
+                if not self._dashboard:
+                    _subject = str(args.get("subject") or args.get("prototype") or "custom hologram object").strip()
+                    self.ui.show_holo_project({
+                        "id": "PC-LOCAL-HOLO",
+                        "name": str(args.get("project_name") or _subject[:48]),
+                        "model": "custom",
+                        "subject": _subject,
+                        "mode": str(args.get("display_mode") or "holo"),
+                        "notes": args.get("notes") or "",
+                        "components": args.get("components") or [],
+                        "geometry": args.get("geometry") or [],
+                        "parts": args.get("parts") or [],
+                    })
+                    result = "Rendered the custom hologram and blueprint locally on the PC. The dashboard is offline, so remote mirroring is unavailable."
+                else:
+                    _model_raw = str(args.get("prototype") or "custom").lower().strip()
+                    _model_aliases = {
+                        "smart glasses": "glasses", "glass": "glasses", "camera glasses": "glasses",
+                        "ар очки": "glasses", "очки": "glasses", "перчатка": "glove", "костюм": "suit",
+                        "любой объект": "custom", "произвольный": "custom", "any": "custom",
+                    }
+                    _known_models = {"glasses", "glove", "suit", "custom"}
+                    _model = _model_aliases.get(_model_raw, _model_raw)
+                    _subject = str(args.get("subject") or "").strip()
+                    if _model not in _known_models:
+                        _subject = _subject or _model_raw
+                        _model = "custom"
+                    if _model == "custom" and not _subject:
+                        _subject = "custom hologram object"
+                    _mode = str(args.get("display_mode") or "holo").lower().strip()
+                    _mode_aliases = {"clear view": "clear", "по частям": "exploded", "частями": "exploded", "каркас": "wireframe"}
+                    _mode = _mode_aliases.get(_mode, _mode)
+                    try:
+                        project = self._dashboard.create_holo_project(
+                            model=_model,
+                            mode=_mode,
+                            name=args.get("project_name") or (_subject[:48] if _model == "custom" else ""),
+                            clarity=args.get("clarity", 85),
+                            notes=args.get("notes") or "",
+                            components=args.get("components"),
+                            subject=_subject,
+                            blueprint=args.get("blueprint") or "",
+                            geometry=args.get("geometry"),
+                            parts=args.get("parts"),
+                        )
+                        self.ui.show_holo_project(project)
+                        await self._dashboard.broadcast({"type": "holo_project", "project": project})
+                        self.ui.show_content(
+                            "HOLO LAB — " + project["id"],
+                            f"{project['name']}\n\n"
+                            f"Subject: {project.get('subject') or project['model']} · Display: {project['mode']}\n"
+                            f"AI geometry primitives: {len(project.get('geometry') or [])}\n"
+                            "Open the Remote Dashboard or use the PC Holo Lab to inspect the animated concept, "
+                            "component schedule, geometry and exploded view."
+                        )
+                        result = (
+                            f"Created hologram {project['id']} for {project.get('subject') or project['model']}. "
+                            "The AI blueprint and geometry are now rendered on the PC monitor and mirrored to connected dashboards. "
+                            "This is a software visualization, not a physical hologram."
+                        )
+                    except ValueError as exc:
+                        result = f"I could not create that hologram: {exc}. Use a supported wearable or describe any custom subject."
+
+            elif name == "holo_diagnose":
+                from actions.holo_lab import diagnose_project as _diagnose_holo, format_diagnostics as _format_holo
+                symptom = str(args.get("symptom") or "unknown symptom")[:300]
+                issues = _diagnose_holo(
+                    {"model": "custom", "subject": "current Holo Lab build", "notes": symptom},
+                    args.get("parts"),
+                    symptom,
+                )
+                self.ui.run_holo_diagnostics(symptom)
+                result = _format_holo(issues)
+
+            elif name == "print_holo_blueprint":
+                self.ui.print_holo_blueprint()
+                result = "I opened the PC printer dialog for the current Holo Lab blueprint, BOM and diagnostics. Choose a printer and confirm."
+
             elif name == "remember_face":
+
                 who = (args.get("name") or args.get("person") or "").strip()
                 frame = self._last_frame
                 if not who:
@@ -1982,6 +2143,7 @@ class JarvisLive:
             from dashboard.server import DashboardServer
             self._dashboard = DashboardServer()
             self._dashboard.set_connect_callback(self._on_phone_connected)
+            self._dashboard.set_holo_callback(self.ui.show_holo_project)
             asyncio.create_task(self._dashboard.serve())
             # Wire the Remote overlay's device hub (list + kick + revoke)
             def _kick_device(did: str) -> None:
