@@ -99,6 +99,18 @@ This is an honest software prototype: it renders a hologram-style visualization 
 
 The headphones can be paired either to the **phone** (Remote Dashboard) or to the **PC** — EDIT supports both.
 
+### 🗣️ Wake Bracket Protocol — «EDIT … команда … EDIT» (default ON)
+
+By default EDIT answers **only** voice commands framed between two standalone **«EDIT»** words:
+
+1. Say **«EDIT»** (эдит / едит / edith) — EDIT starts paying attention but stays silent.
+2. Say your command: «EDIT, включи музыку, EDIT».
+3. Say **«EDIT»** again — EDIT answers exactly what was said between the two words.
+
+EDIT hears everything, but outside the frame it stays completely silent (no reaction to a single name, noise, or unframed questions). The wake word must be a standalone word — «отредактируй», «редактировать», «editable» etc. do **not** trigger it. While EDIT is speaking you can interrupt by saying «EDIT» — it stops and listens.
+
+The protocol is saved in `config/api_keys.json` as `wake_bracket` (default `true`) and can be switched off by voice: *«выключи режим EDIT в начале и в конце»* (then EDIT responds to everything) or back on with *«включи wake protocol»*.
+
 ### 📱 Headphones connected to the phone (main scenario)
 
 1. Open the **Remote Dashboard** on your phone (pair via **Remote Control** QR) and tap the **🎧** chip in the header.

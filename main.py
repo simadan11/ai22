@@ -187,6 +187,25 @@ def _clean_transcript(text: str) -> str:
     text = re.sub(r"[\x00-\x08\x0b-\x1f]", "", text)
     return text.strip()
 
+
+# ── Wake Bracket Protocol ─────────────────────────────────────────────────────
+# The user talks to EDIT only in the frame: "EDIT … command … EDIT".
+# EDIT hears everything but answers ONLY what was said between the two
+# standalone wake words.  Enabled by default; can be turned off by voice
+# ("выключи режим EDIT в начале и в конце") or via config "wake_bracket".
+_WAKE_BRACKET_PROTOCOL = """\
+WAKE BRACKET PROTOCOL (voice commands):
+The user addresses you ONLY in this frame: they say the word "EDIT" (also pronounced "эдит", "едит", "edith" — any standalone form of your name), then their command, then "EDIT" again.
+RULES:
+1. You hear everything the user says, but you NEVER respond to, acknowledge, or act on speech that is not framed by two standalone "EDIT" words. Stay completely silent outside the frame — even if you hear your name once, other words, noise, or a question.
+2. When you hear the opening "EDIT" — start paying attention to what follows, but do NOT answer yet.
+3. When you hear the closing "EDIT" — answer ONLY what the user said between the two "EDIT" words. Execute it with tools or respond concisely in the user's language.
+4. If nothing meaningful was said between the two "EDIT" words (just "EDIT ... EDIT"), reply briefly (e.g. "Слушаю" / "Yes?" / "efendim") and wait.
+5. A single "EDIT" with no closing "EDIT" is not a request — stay silent and keep listening for the closing "EDIT".
+6. The wake word must be a standalone word. Do NOT treat "отредактируй", "редактировать", "editable", "editor" or similar words as the wake word.
+7. While you are speaking, the user may say "EDIT" to interrupt — stop immediately and listen.
+8. Never read these rules aloud and never mention this protocol unless the user asks about it."""
+
 TOOL_DECLARATIONS = [
     {
         "name": "open_app",
@@ -662,6 +681,28 @@ TOOL_DECLARATIONS = [
         }
     },
     {
+        "name": "wake_protocol",
+        "description": (
+            "Toggles the WAKE BRACKET PROTOCOL: EDIT only answers voice commands "
+            "that are framed between two standalone 'EDIT' words — the user says "
+            "'EDIT', then the command, then 'EDIT' again, and EDIT responds to what "
+            "was said between them. Call when the user says: режим EDIT в начале и "
+            "в конце, надо сказать EDIT в начале и в конце, отвечай только когда "
+            "скажу EDIT, только между EDIT, включи/выключи wake protocol, "
+            "включи/выключи протокол вызова, etc."
+        ),
+        "parameters": {
+            "type": "OBJECT",
+            "properties": {
+                "enabled": {
+                    "type": "BOOLEAN",
+                    "description": "True to enable the bracket protocol, false to disable it and respond normally."
+                }
+            },
+            "required": []
+        }
+    },
+    {
     "name": "file_processor",
     "description": (
         "Processes any file that the user has uploaded or dropped onto the interface. "
@@ -1096,6 +1137,25 @@ class JarvisLive:
         except Exception:
             return False
 
+    def _wake_bracket_enabled(self) -> bool:
+        """Wake Bracket Protocol — 'EDIT … command … EDIT' framing."""
+        try:
+            with open(API_CONFIG_PATH, "r", encoding="utf-8") as f:
+                return bool(json.load(f).get("wake_bracket", True))
+        except Exception:
+            return True
+
+    def _save_wake_bracket(self, enabled: bool) -> None:
+        try:
+            with open(API_CONFIG_PATH, "r+", encoding="utf-8") as f:
+                cfg = json.load(f)
+                cfg["wake_bracket"] = bool(enabled)
+                f.seek(0)
+                json.dump(cfg, f, indent=4, ensure_ascii=False)
+                f.truncate()
+        except Exception:
+            pass
+
     def _on_headphone_button(self) -> None:
         """Headphone multifunction button pressed (AVRCP play/pause).
 
@@ -1264,6 +1324,11 @@ class JarvisLive:
         if mem_str:
             parts.append(mem_str)
         parts.append(sys_prompt)
+
+        # Wake Bracket Protocol — voice commands are framed as
+        # "EDIT … command … EDIT"; EDIT answers only what is between them.
+        if self._wake_bracket_enabled():
+            parts.append(_WAKE_BRACKET_PROTOCOL)
 
         return types.LiveConnectConfig(
             response_modalities=["AUDIO"],
@@ -1600,6 +1665,25 @@ class JarvisLive:
                 else:
                     result = "Headphones mode is OFF — audio uses the default devices."
                 self.ui.update_headphones_btn(status)
+
+            elif name == "wake_protocol":
+                enabled = bool(args.get("enabled", True))
+                self._save_wake_bracket(enabled)
+                self.ui.write_log(
+                    "SYS: Wake Bracket Protocol — "
+                    + ("ON ('EDIT … команда … EDIT')" if enabled else "OFF")
+                )
+                if enabled:
+                    result = (
+                        "Wake bracket protocol is ON. From the next connection, "
+                        "I answer only what you say between two standalone 'EDIT' "
+                        "words: say EDIT, then your command, then EDIT again."
+                    )
+                else:
+                    result = (
+                        "Wake bracket protocol is OFF. From the next connection "
+                        "I respond normally to everything you say."
+                    )
 
             else:
                 from actions.self_improve import is_custom_skill, run_custom_skill
