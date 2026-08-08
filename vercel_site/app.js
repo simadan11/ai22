@@ -1,5 +1,5 @@
 // EDIT — мобильный клиент (Vercel)
-// Пароль → /api/chat → Gemini → ответ + озвучка (TTS телефона → наушники)
+// Вход: пароль (проверяет сервер) + личный API-ключ Gemini (хранится на устройстве).
 
 (() => {
   "use strict";
@@ -12,6 +12,8 @@
   const stTxt = $("st");
   const inp = $("inp");
   const pass = $("pass");
+  const apiKey = $("apikey");
+  const eye = $("eye");
   const loginBtn = $("login-btn");
   const loginErr = $("login-err");
   const micBtn = $("mic-btn");
@@ -20,7 +22,8 @@
   const hpBtn = $("hp-btn");
 
   let password = sessionStorage.getItem("edit_pass") || "";
-  let history = [];            // [{role:'user'|'assistant', content}]
+  let apiKeySaved = sessionStorage.getItem("edit_apikey") || "";
+  let history = [];
   let busy = false;
   let ttsOn = true;
   let hpOn = false;
@@ -29,6 +32,22 @@
   let wakeLock = null;
   let hpAudio = null;
 
+  // ── частицы на экране входа ─────────────────────────────────────────────
+  (function makeParticles() {
+    const wrap = $("particles");
+    if (!wrap) return;
+    const n = Math.min(28, Math.floor(window.innerWidth / 14));
+    for (let i = 0; i < n; i++) {
+      const p = document.createElement("i");
+      const s = 2 + Math.random() * 5;
+      p.style.width = p.style.height = s + "px";
+      p.style.left = Math.random() * 100 + "%";
+      p.style.animationDuration = (7 + Math.random() * 9) + "s";
+      p.style.animationDelay = (Math.random() * 8) + "s";
+      wrap.appendChild(p);
+    }
+  })();
+
   // ── статус ───────────────────────────────────────────────────────────────
   function setStatus(mode, text) {
     pill.className = "pill " + (mode === "on" ? "on" : mode === "err" ? "err" : "");
@@ -36,42 +55,77 @@
   }
 
   // ── сообщения ────────────────────────────────────────────────────────────
-  function addMsg(cls, text) {
-    const d = document.createElement("div");
-    d.className = "msg " + cls;
-    d.textContent = text;
-    feed.appendChild(d);
+  function addRow(cls, content) {
+    const row = document.createElement("div");
+    row.className = "row " + cls;
+    const av = document.createElement("div");
+    av.className = "avatar " + (cls === "edit" ? "edit" : "me");
+    av.innerHTML = cls === "edit" ? "<span>E</span>" : "🙂";
+    const m = document.createElement("div");
+    m.className = "msg";
+    m.textContent = content;
+    row.appendChild(av);
+    row.appendChild(m);
+    feed.appendChild(row);
     feed.scrollTop = feed.scrollHeight;
-    return d;
+    return row;
   }
-  function sysMsg(text) { addMsg("msg-sys", text); }
+  function addMsg(cls, text) {
+    if (cls === "msg-sys") {
+      const d = document.createElement("div");
+      d.className = "msg msg-sys";
+      d.textContent = text;
+      feed.appendChild(d);
+      feed.scrollTop = feed.scrollHeight;
+      return d;
+    }
+    return addRow(cls === "msg-e" ? "edit" : "user", text);
+  }
+  function addTyping() {
+    const row = document.createElement("div");
+    row.className = "row edit";
+    const av = document.createElement("div");
+    av.className = "avatar edit";
+    av.innerHTML = "<span>E</span>";
+    const m = document.createElement("div");
+    m.className = "msg typing";
+    m.innerHTML = "<i></i><i></i><i></i>";
+    row.appendChild(av);
+    row.appendChild(m);
+    feed.appendChild(row);
+    feed.scrollTop = feed.scrollHeight;
+    return row;
+  }
 
-  function esc(s) {
-    return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-  }
+  function sysMsg(text) { addMsg("msg-sys", text); }
 
   // ── вход ─────────────────────────────────────────────────────────────────
   function showApp() {
     login.style.display = "none";
     app.classList.add("active");
-    sysMsg("Вход выполнен. EDIT готов — напиши или нажми 🎤, чтобы говорить. Тап по наушнику — тоже «говорить».");
+    sysMsg("EDIT готов — напиши или нажми 🎤, чтобы говорить. Тап по наушнику — тоже «говорить».");
   }
 
   async function tryLogin() {
     const p = pass.value.trim();
+    const k = apiKey.value.trim();
     if (!p) { loginErr.textContent = "Введи пароль"; return; }
+    if (!k) { loginErr.textContent = "Введи API-ключ Gemini"; return; }
     loginBtn.disabled = true;
+    loginBtn.textContent = "Проверка…";
     loginErr.textContent = "";
     try {
       const r = await fetch("/api/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ password: p, messages: [{ role: "user", content: "Проверка" }] }),
+        body: JSON.stringify({ password: p, api_key: k, messages: [{ role: "user", content: "Проверка" }] }),
       });
       const j = await r.json();
       if (r.ok && j.ok) {
         password = p;
+        apiKeySaved = k;
         sessionStorage.setItem("edit_pass", p);
+        sessionStorage.setItem("edit_apikey", k);
         showApp();
       } else if (r.status === 401) {
         loginErr.textContent = "Неверный пароль";
@@ -82,13 +136,20 @@
       loginErr.textContent = "Нет соединения с сервером";
     } finally {
       loginBtn.disabled = false;
+      loginBtn.textContent = "ВОЙТИ";
     }
   }
 
   loginBtn.addEventListener("click", tryLogin);
   pass.addEventListener("keydown", (e) => { if (e.key === "Enter") tryLogin(); });
+  apiKey.addEventListener("keydown", (e) => { if (e.key === "Enter") tryLogin(); });
+  eye.addEventListener("click", () => {
+    const show = pass.type === "password";
+    pass.type = show ? "text" : "password";
+    eye.textContent = show ? "🙈" : "👁";
+  });
 
-  if (password) showApp();
+  if (password && apiKeySaved) showApp();
 
   // ── отправка ─────────────────────────────────────────────────────────────
   async function send(text) {
@@ -97,15 +158,13 @@
     busy = true;
     addMsg("msg-u", text);
     history.push({ role: "user", content: text });
-    const t = document.createElement("div");
-    t.className = "msg msg-e typing"; t.textContent = "EDIT";
-    feed.appendChild(t); feed.scrollTop = feed.scrollHeight;
+    const t = addTyping();
 
     try {
       const r = await fetch("/api/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ password, messages: history }),
+        body: JSON.stringify({ password, api_key: apiKeySaved, messages: history }),
       });
       const j = await r.json();
       if (!r.ok) {
@@ -165,7 +224,7 @@
     if (!ttsOn && window.speechSynthesis) speechSynthesis.cancel();
   });
 
-  // ── голосовой ввод (микрофон) ────────────────────────────────────────────
+  // ── голосовой ввод ───────────────────────────────────────────────────────
   function startRecognition() {
     const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
     if (!SR) { sysMsg("Распознавание речи не поддерживается этим браузером"); return; }
@@ -175,12 +234,12 @@
       rec.lang = "ru-RU";
       rec.interimResults = false;
       rec.maxAlternatives = 1;
-      rec.onstart = () => { listening = true; micBtn.textContent = "⏹"; micBtn.classList.add("off"); holdWakeLock(); };
+      rec.onstart = () => { listening = true; micBtn.classList.add("rec"); micBtn.querySelector(".mic-ico").textContent = "🔴"; holdWakeLock(); };
       rec.onresult = (e) => {
         const txt = e.results[0][0].transcript.trim();
         if (txt) { inp.value = ""; send(txt); }
       };
-      rec.onerror = (e) => { sysMsg("Микрофон: " + (e.error || "ошибка")); stopRecognition(); };
+      rec.onerror = (e) => { if (e.error !== "aborted") sysMsg("Микрофон: " + (e.error || "ошибка")); stopRecognition(); };
       rec.onend = () => stopRecognition();
       recognition = rec;
       rec.start();
@@ -188,8 +247,8 @@
   }
   function stopRecognition() {
     listening = false;
-    micBtn.textContent = "🎤";
-    micBtn.classList.remove("off");
+    micBtn.classList.remove("rec");
+    micBtn.querySelector(".mic-ico").textContent = "🎤";
     if (recognition) { try { recognition.stop(); } catch (_) {} recognition = null; }
     releaseWakeLockIfIdle();
   }
@@ -209,7 +268,6 @@
         }
       } catch (_) {}
     }
-    // тихий аудио-цикл — держит вкладку активной медиа-сессией
     try {
       if (!hpAudio) {
         hpAudio = new Audio(silentWav());
@@ -268,7 +326,6 @@
   net();
   setInterval(net, 15000);
 
-  // PWA install
   if ("serviceWorker" in navigator) {
     window.addEventListener("load", () => { navigator.serviceWorker.register("/sw.js").catch(() => {}); });
   }

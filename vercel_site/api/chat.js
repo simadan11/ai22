@@ -1,5 +1,7 @@
 // EDIT — serverless чат-прокси к Gemini (Vercel /api/chat)
-// Пароль по умолчанию: gelius (можно переопределить через env EDIT_PASSWORD).
+// Пароль проверяется здесь. API-ключ Gemini можно передать из запроса
+// (поле api_key — вводится при входе на сайте) или задать через env
+// GEMINI_API_KEY. Пароль по умолчанию: gelius (env EDIT_PASSWORD).
 
 const DEFAULT_PASSWORD = "gelius";
 
@@ -20,19 +22,19 @@ export default async function handler(req, res) {
     return res.status(400).json({ ok: false, error: "Bad JSON" });
   }
 
-  // ── Пароль ─────────────────────────────────────────────────────────────
+  // ── Пароль (проверяется на сервере, в браузер не выдаётся) ─────────────
   const password = String(body.password || "");
   const expected = process.env.EDIT_PASSWORD || DEFAULT_PASSWORD;
   if (password !== expected) {
     return res.status(401).json({ ok: false, error: "Неверный пароль" });
   }
 
-  // ── Ключ Gemini (задаётся в Vercel → Settings → Environment Variables) ──
-  const apiKey = process.env.GEMINI_API_KEY;
+  // ── API-ключ: из запроса (введён при входе) или из env ─────────────────
+  const apiKey = String(body.api_key || "").trim() || process.env.GEMINI_API_KEY;
   if (!apiKey) {
     return res.status(500).json({
       ok: false,
-      error: "GEMINI_API_KEY не задан. Добавь его в Vercel → Settings → Environment Variables.",
+      error: "Нет API-ключа: введи его при входе на сайте (поле «API-ключ Gemini»).",
     });
   }
 
