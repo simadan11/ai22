@@ -164,7 +164,7 @@
   $("s-test").addEventListener("click", () => {
     const t = "Привет, " + (profile.user || "хозяин") + ". Я " + profile.name + ", твой персональный ассистент.";
     settings.classList.remove("open");
-    setTimeout(() => speak(t), 300);
+    setTimeout(() => speak({ text: t }), 300);
   });
   $("s-rem-btn").addEventListener("click", () => {
     const min = parseInt($("s-rem-min").value, 10);
@@ -181,7 +181,7 @@
         try { new Notification("EDIT — напоминание", { body: txt }); } catch (_) {}
       }
       toast("⏰ " + txt);
-      speak("Напоминаю: " + txt);
+      speak({ text: "Напоминаю: " + txt });
     }, min * 60000);
     reminders.push(id);
     sysMsg("⏰ Напоминание через " + min + " мин: " + txt);
@@ -224,7 +224,7 @@
       if (j.tool) addRow("edit", j.tool, true);
       addRow("edit", j.text);
       setState("speak");
-      speak(j.text);
+      speak({ text: j.text, audio: j.audio });
     } catch (_) {
       t.remove();
       addRow("edit", "⚠️ Нет соединения");
@@ -236,8 +236,11 @@
   sendBtn.addEventListener("click", () => { send(inp.value); inp.value = ""; });
   inp.addEventListener("keydown", (e) => { if (e.key === "Enter") { send(inp.value); inp.value = ""; } });
 
-  // ── TTS ────────────────────────────────────────────────────────────────
+  // ── Голос ──────────────────────────────────────────────────────────────
+  // Основной голос — fish-audio/s2.1-pro-free:free (нейронный mp3 с сервера).
+  // Если сервер не прислал аудио — фолбэк на системный TTS браузера.
   let ttsVoice = null;
+  let audioEl = null;
   if (window.speechSynthesis) {
     const pick = () => {
       try {
@@ -249,8 +252,16 @@
     pick();
     try { speechSynthesis.onvoiceschanged = pick; } catch (_) {}
   }
-  function speak(text) {
-    if (!ttsOn || !window.speechSynthesis) return;
+  function stopTts() {
+    if (audioEl) { try { audioEl.pause(); audioEl = null; } catch (_) {} }
+    if (window.speechSynthesis) { try { speechSynthesis.cancel(); } catch (_) {} }
+  }
+  function speak(res) {
+    const text = res && res.text ? String(res.text) : "";
+    if (!ttsOn) return;
+    if (res && res.audio) { playAudio(res.audio); return; }
+    // фолбэк: системный TTS
+    if (!window.speechSynthesis) return;
     try {
       speechSynthesis.cancel();
       const u = new SpeechSynthesisUtterance(text.replace(/[#*_`\[\]]/g, ""));
@@ -262,7 +273,20 @@
       holdWakeLock();
     } catch (_) {}
   }
-  function stopTts() { if (window.speechSynthesis) { try { speechSynthesis.cancel(); } catch (_) {} } }
+  function playAudio(b64) {
+    try {
+      const bin = atob(b64);
+      const bytes = new Uint8Array(bin.length);
+      for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+      const url = URL.createObjectURL(new Blob([bytes], { type: "audio/mpeg" }));
+      const a = new Audio(url);
+      a.onended = () => { setState("idle"); releaseWakeLockIfIdle(); URL.revokeObjectURL(url); };
+      a.onerror = () => { setState("idle"); releaseWakeLockIfIdle(); };
+      audioEl = a;
+      holdWakeLock();
+      a.play().catch(() => { setState("idle"); releaseWakeLockIfIdle(); });
+    } catch (_) { setState("idle"); }
+  }
   ttsBtn.addEventListener("click", () => {
     ttsOn = !ttsOn;
     ttsBtn.textContent = ttsOn ? "🔊" : "🔇";
