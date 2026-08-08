@@ -122,7 +122,7 @@ The protocol is saved in `config/api_keys.json` as `wake_bracket` (default `true
 
 Notes:
 
-- **No double voice:** while the phone's 🎧 mode is ON, the PC speaker is muted automatically — EDIT's voice plays only through the phone (into your headphones). The mode is restored after a page reload.
+- **No double voice:** while the phone's 🎧 mode is ON, the PC speaker is muted automatically AND the phone tab that runs the mode becomes the single audio sink — no other tab/device plays EDIT's voice, so you never hear two voices (even with the dashboard open in two tabs). The mode is restored after a page reload.
 - Works best in **Chrome on Android** (`navigator.mediaSession`). If the phone is also playing music in another app, the button controls that app instead — pause it first.
 - **Works with Gelius and any other Bluetooth earbuds/headset** — they all send the standard AVRCP play/pause command on the multifunction button (on Gelius TWS earbuds it's a **single tap** on the earbud). EDIT listens to all of the play/pause/next/prev actions, so any of them triggers push-to-listen.
 - While the mode is ON the tab keeps a silent media session so the button reaches EDIT, and the headset-mic channel is open (tap 🎤 to stop it manually, 🎧 again to turn the mode off).

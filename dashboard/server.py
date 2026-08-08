@@ -564,6 +564,7 @@ class DashboardServer:
         self._headphones_callback         = None   # async (enabled|None) -> status dict
         self._headphones_button_callback  = None   # async () -> None — phone headphone button
         self._phone_headphones_callback   = None   # async (bool) -> dict — phone Headphones Mode on/off
+        self._audio_sink: str | None      = None   # dev_id of the phone running Headphones Mode
         self._pending_keys: dict[str, float] = {}
         self._device_sessions: dict[str, dict] = {}  # device_token → {session_key}
         self._phone_audio_queue: asyncio.Queue    = asyncio.Queue(maxsize=200)
@@ -763,11 +764,24 @@ class DashboardServer:
             pass  # phone lags more than ~8 s behind — drop rather than back up
 
     async def _audio_broadcast_loop(self) -> None:
-        """Fan out JARVIS voice PCM to every connected phone (binary WS frames)."""
+        """Fan out JARVIS voice PCM to connected phones (binary WS frames).
+
+        While a phone runs Headphones Mode, its WS connection is the audio
+        sink and ONLY it receives the voice — otherwise every connected
+        tab/device plays it and the user hears two voices in the earbuds.
+        """
         while True:
             chunk = await self._audio_out_queue.get()
             if not self._clients:
                 continue
+            sink = self._audio_sink
+            if sink and sink in self._client_info:
+                ws = self._client_info[sink].get("ws")
+                try:
+                    await ws.send_bytes(chunk)
+                    continue
+                except Exception:
+                    self._audio_sink = None   # sink tab closed → back to fan-out
             dead: set[WebSocket] = set()
             for ws in list(self._clients):
                 try:
@@ -1064,12 +1078,32 @@ class DashboardServer:
                 body = await req.json()
             except Exception:
                 body = {}
+            enabled = bool(body.get("enabled"))
+
+            # Single audio sink: while Headphones Mode is ON, only THIS client
+            # (the phone with the earbuds) receives EDIT's voice — the others
+            # stay silent, otherwise the user hears two voices.
+            tok    = req.headers.get("authorization", "").removeprefix("Bearer ").strip()
+            dev_id = str((body or {}).get("dev_id") or "").strip()
+            if enabled:
+                if dev_id and dev_id in self._client_info:
+                    self._audio_sink = dev_id
+                else:
+                    # Fallback: newest connected client with the same token
+                    for dev_id in reversed(list(self._client_info)):
+                        if self._client_info[dev_id].get("token") == tok:
+                            self._audio_sink = dev_id
+                            break
+            else:
+                self._audio_sink = None
+
             try:
-                status = await self._phone_headphones_callback(
-                    bool(body.get("enabled"))
-                )
+                status = await self._phone_headphones_callback(enabled)
             except Exception as e:
                 return JSONResponse({"ok": False, "error": str(e)[:200]}, status_code=502)
+            # Tell every tab which one is the audio sink, so non-sink tabs
+            # mute their own speaker (belt & suspenders against double voice).
+            await self.broadcast({"type": "headphones", "sink": self._audio_sink})
             return JSONResponse({"ok": True, "status": status})
 
         @app.post("/api/headphones/button")
@@ -1386,7 +1420,15 @@ class DashboardServer:
                 "ip":   ip,
                 "name": _device_name(websocket.headers.get("user-agent", "")),
                 "since": time.time(),
+                "token": tok,
             }
+            # Tell this client its own dev_id so it can self-identify as the
+            # audio sink when it enables Headphones Mode (distinguishes tabs
+            # that share the same auth token).
+            try:
+                await websocket.send_json({"type": "dev_id", "id": dev_id})
+            except Exception:
+                pass
             asyncio.create_task(self.broadcast(
                 {"type": "devices", "count": len(self._clients)}
             ))
@@ -1410,6 +1452,8 @@ class DashboardServer:
             finally:
                 self._clients.discard(websocket)
                 self._client_info.pop(dev_id, None)
+                if self._audio_sink == dev_id:
+                    self._audio_sink = None   # the headphones-mode tab closed
                 asyncio.create_task(self.broadcast(
                     {"type": "devices", "count": len(self._clients)}
                 ))

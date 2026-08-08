@@ -727,8 +727,10 @@
       if (m.type === 'sys')           sys(m.text);
       if (m.type === 'file_received') _onFileReceived(m);
       if (m.type === 'devices')       _setDevCount(m.count);
+      if (m.type === 'dev_id')        { _myDevId = m.id; _maybeRestoreHp(); }
       if (m.type === 'headphones') {
         if (m.action === 'listen') sys('🎧 Headphone button pressed — EDIT listening…');
+        if ('sink' in m) _applySink(m.sink);
       }
       if (m.type === 'vision_status') sys(m.state === 'error' ? m.text : 'Phone camera: ' + m.state + '…');
       if (m.type === 'holo_project' && m.project) {
@@ -960,6 +962,15 @@
     let _hpOn      = false;
     let _hpAudio   = null;   // silent loop keeps this tab the active media session
     let _hpMicOwned = false; // true when the mode opened the mic itself
+    let _myDevId   = null;   // this tab's id, assigned by the server on /ws connect
+
+    function _setPhoneHpMode(on) {
+      _authFetch('/api/headphones/phone-mode', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ enabled: on, dev_id: _myDevId })
+      }).catch(() => {});
+    }
 
     async function toggleHeadphones() {
       const next = !_hpOn;
@@ -970,13 +981,10 @@
         }
         _hpOn = true;
         localStorage.setItem('hp_mode', '1');
-        // Mute the PC speaker — EDIT's voice now comes only through the
-        // phone (= the Bluetooth headphones). Otherwise you hear two voices.
-        _authFetch('/api/headphones/phone-mode', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ enabled: true })
-        }).catch(() => {});
+        // Mute the PC speaker and make THIS tab the only audio sink —
+        // EDIT's voice comes only through the phone (= the headphones),
+        // never duplicated on a second tab/device.
+        _setPhoneHpMode(true);
         sys('🎧 Headphones mode ON — EDIT speaks ONLY in your headphones, PC speakers muted. Tap your Gelius (single tap) to talk');
         // Ask for mic permission now (inside the tap gesture) and open the
         // headset-mic channel — so EDIT already hears you and the headphone
@@ -990,11 +998,7 @@
         }
         _hpOn = false;
         localStorage.setItem('hp_mode', '0');
-        _authFetch('/api/headphones/phone-mode', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ enabled: false })
-        }).catch(() => {});
+        _setPhoneHpMode(false);
         sys('🎧 Headphones mode OFF — PC audio restored');
       }
       const b = document.getElementById('hp-btn');
@@ -1060,25 +1064,34 @@
       if (!_voiceWs) doMic();
     }
 
-    // restore the mode after a page reload (the PC side keeps its mute flag)
-    if (localStorage.getItem('hp_mode') === '1') {
+    // Only the audio-sink tab (the one running Headphones Mode) plays EDIT's
+    // voice — every other tab/device mutes its own speaker so the user never
+    // hears two voices, even if a second tab has the dashboard open.
+    let _hpSinkId = null;
+    function _applySink(id) {
+      _hpSinkId = id || null;
+      _spkOn = !(_hpSinkId && _hpSinkId !== _myDevId);
+      const b = document.getElementById('spk-btn');
+      if (b) {
+        b.textContent = _spkOn ? '🔊' : '🔇';
+        b.classList.toggle('muted', !_spkOn);
+      }
+    }
+
+    // restore the mode after a page reload (the PC side keeps its mute flag).
+    // Runs once we know this tab's dev_id, so the server can make THIS tab
+    // the audio sink again.
+    function _maybeRestoreHp() {
+      if (localStorage.getItem('hp_mode') !== '1' || _hpOn || !_myDevId) return;
       if (_startHpMode()) {
         _hpOn = true;
         const b = document.getElementById('hp-btn');
         if (b) b.classList.toggle('on', true);
-        _authFetch('/api/headphones/phone-mode', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ enabled: true })
-        }).catch(() => {});
+        _setPhoneHpMode(true);
         sys('🎧 Headphones mode restored — tap your Gelius to talk to EDIT');
       } else {
         localStorage.setItem('hp_mode', '0');
-        _authFetch('/api/headphones/phone-mode', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ enabled: false })
-        }).catch(() => {});
+        _setPhoneHpMode(false);
       }
     }
 
