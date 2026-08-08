@@ -957,8 +957,9 @@
     // becomes push-to-listen: EDIT stops talking on the PC and hears you
     // through this phone's microphone (= the headset mic).  EDIT's voice
     // already plays on the phone's default output — the headphones.
-    let _hpOn    = false;
-    let _hpAudio = null;   // silent loop keeps this tab the active media session
+    let _hpOn      = false;
+    let _hpAudio   = null;   // silent loop keeps this tab the active media session
+    let _hpMicOwned = false; // true when the mode opened the mic itself
 
     async function toggleHeadphones() {
       const next = !_hpOn;
@@ -968,15 +969,33 @@
           return;
         }
         _hpOn = true;
-        sys('🎧 Headphones mode ON — tap the button on your headphones (Gelius: single tap) to talk to EDIT');
+        localStorage.setItem('hp_mode', '1');
+        // Mute the PC speaker — EDIT's voice now comes only through the
+        // phone (= the Bluetooth headphones). Otherwise you hear two voices.
+        _authFetch('/api/headphones/phone-mode', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ enabled: true })
+        }).catch(() => {});
+        sys('🎧 Headphones mode ON — EDIT speaks ONLY in your headphones, PC speakers muted. Tap your Gelius (single tap) to talk');
         // Ask for mic permission now (inside the tap gesture) and open the
         // headset-mic channel — so EDIT already hears you and the headphone
         // button can restart the stream later without another permission tap.
-        if (!_voiceWs) doMic();
+        if (!_voiceWs) { doMic(); _hpMicOwned = true; }
       } else {
         _stopHpMode();
+        if (_hpMicOwned) {
+          if (_voiceWs) _stopVoice();
+          _hpMicOwned = false;
+        }
         _hpOn = false;
-        sys('🎧 Headphones mode OFF');
+        localStorage.setItem('hp_mode', '0');
+        _authFetch('/api/headphones/phone-mode', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ enabled: false })
+        }).catch(() => {});
+        sys('🎧 Headphones mode OFF — PC audio restored');
       }
       const b = document.getElementById('hp-btn');
       if (b) b.classList.toggle('on', _hpOn);
@@ -1039,6 +1058,28 @@
       _authFetch('/api/headphones/button', { method: 'POST' }).catch(() => {});
       // 2) stream this phone's mic (= headset mic) so EDIT hears the user
       if (!_voiceWs) doMic();
+    }
+
+    // restore the mode after a page reload (the PC side keeps its mute flag)
+    if (localStorage.getItem('hp_mode') === '1') {
+      if (_startHpMode()) {
+        _hpOn = true;
+        const b = document.getElementById('hp-btn');
+        if (b) b.classList.toggle('on', true);
+        _authFetch('/api/headphones/phone-mode', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ enabled: true })
+        }).catch(() => {});
+        sys('🎧 Headphones mode restored — tap your Gelius to talk to EDIT');
+      } else {
+        localStorage.setItem('hp_mode', '0');
+        _authFetch('/api/headphones/phone-mode', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ enabled: false })
+        }).catch(() => {});
+      }
     }
 
     function _playSpk(buf) {

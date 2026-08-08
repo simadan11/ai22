@@ -563,6 +563,7 @@ class DashboardServer:
         self._holo_callback               = None
         self._headphones_callback         = None   # async (enabled|None) -> status dict
         self._headphones_button_callback  = None   # async () -> None — phone headphone button
+        self._phone_headphones_callback   = None   # async (bool) -> dict — phone Headphones Mode on/off
         self._pending_keys: dict[str, float] = {}
         self._device_sessions: dict[str, dict] = {}  # device_token → {session_key}
         self._phone_audio_queue: asyncio.Queue    = asyncio.Queue(maxsize=200)
@@ -637,6 +638,11 @@ class DashboardServer:
         """fn is async: () -> None — fired when the phone-side headphone
         button is pressed (EDIT should stop talking and listen)."""
         self._headphones_button_callback = fn
+
+    def set_phone_headphones_callback(self, fn) -> None:
+        """fn is async: (enabled: bool) -> dict — a phone turned its
+        Headphones Mode on/off (PC speaker should mute while ON)."""
+        self._phone_headphones_callback = fn
 
     def create_holo_project(
         self,
@@ -1040,6 +1046,30 @@ class DashboardServer:
             except Exception as e:
                 return JSONResponse({"ok": False, "error": str(e)[:200]}, status_code=502)
             # the callback itself broadcasts the fresh status to every client
+            return JSONResponse({"ok": True, "status": status})
+
+        @app.post("/api/headphones/phone-mode")
+        async def headphones_phone_mode_ep(req: Request):
+            """Phone Headphones Mode on/off → mute/restore the PC speaker.
+
+            While a phone runs Headphones Mode, EDIT's voice plays ONLY on the
+            phone (into the Bluetooth headphones) — the PC must not speak too,
+            otherwise the user hears two voices.
+            """
+            if not _auth(req):
+                return JSONResponse({"error": "Unauthorized"}, status_code=401)
+            if not self._phone_headphones_callback:
+                return JSONResponse({"ok": False, "error": "PC audio unavailable"})
+            try:
+                body = await req.json()
+            except Exception:
+                body = {}
+            try:
+                status = await self._phone_headphones_callback(
+                    bool(body.get("enabled"))
+                )
+            except Exception as e:
+                return JSONResponse({"ok": False, "error": str(e)[:200]}, status_code=502)
             return JSONResponse({"ok": True, "status": status})
 
         @app.post("/api/headphones/button")

@@ -918,6 +918,7 @@ class JarvisLive:
         self._is_speaking         = False
         self._speaking_lock       = threading.Lock()
         self._phone_active        = False   # True while phone mic is streaming; pauses PC mic
+        self._phone_headphones_active = False  # True when a phone runs Headphones Mode → PC speaker muted
         self._last_frame: bytes | None = None   # newest live camera frame
         self._pending_vision       = None    # (img_bytes, mime_type, question, angle) to inject after tool response
         self._vision_cam_active    = False   # True if camera was opened for vision → auto-close after response
@@ -1163,6 +1164,26 @@ class JarvisLive:
                 )
             except Exception:
                 pass
+
+    async def _set_phone_headphones_mode(self, active: bool) -> dict:
+        """Phone reported its Headphones Mode turned on/off.
+
+        While ON, EDIT's voice plays ONLY through the phone (= the Bluetooth
+        headphones connected to it), so the PC speaker is muted — otherwise
+        the user hears two voices (PC + phone).
+        """
+        self._phone_headphones_active = bool(active)
+        self._audio_gen += 1   # _play_audio reopens (or skips) the PC stream
+        if active:
+            self.ui.write_log(
+                "🎧 Phone headphones mode ON — EDIT speaks only through the "
+                "phone (PC speakers muted)"
+            )
+        else:
+            self.ui.write_log(
+                "🎧 Phone headphones mode OFF — PC audio restored"
+            )
+        return {"enabled": self._phone_headphones_active}
 
     def _on_headphone_status_changed(self, status: dict) -> None:
         """Called by HeadphonesManager's monitor when BT devices (dis)connect."""
@@ -1614,7 +1635,12 @@ class JarvisLive:
         def callback(indata, frames, time_info, status):
             with self._speaking_lock:
                 jarvis_speaking = self._is_speaking
-            if not jarvis_speaking and not self.ui.muted and not self._phone_active:
+            if (
+                not jarvis_speaking
+                and not self.ui.muted
+                and not self._phone_active
+                and not self._phone_headphones_active
+            ):
                 data = indata.tobytes()
                 loop.call_soon_threadsafe(
                     self.out_queue.put_nowait,
@@ -1780,25 +1806,31 @@ class JarvisLive:
         while True:
             gen = self._audio_gen
             dev = self._audio_devices[1] if self._audio_devices else None
-            try:
-                stream = sd.RawOutputStream(
-                    device=dev,
-                    samplerate=RECEIVE_SAMPLE_RATE,
-                    channels=CHANNELS,
-                    dtype="int16",
-                    blocksize=CHUNK_SIZE,
-                )
-                stream.start()
-            except Exception as e:
-                print(f"[JARVIS] ❌ Play: {e}")
-                if self._audio_gen == gen and dev is not None:
-                    # Stale device (headset unplugged) → drop to default
-                    print("[JARVIS] Play device unavailable — using default")
-                    self._audio_devices = (self._audio_devices[0], None)
-                    self._audio_gen += 1
-                    await asyncio.sleep(1.0)
-                    continue
-                raise
+            stream = None
+            # Phone Headphones Mode: EDIT's voice plays only through the phone
+            # (= the Bluetooth headphones connected to it) — mute the PC
+            # speaker so the user doesn't hear two voices.  The queue is still
+            # drained so the phone keeps receiving the audio via feed_audio.
+            if not self._phone_headphones_active:
+                try:
+                    stream = sd.RawOutputStream(
+                        device=dev,
+                        samplerate=RECEIVE_SAMPLE_RATE,
+                        channels=CHANNELS,
+                        dtype="int16",
+                        blocksize=CHUNK_SIZE,
+                    )
+                    stream.start()
+                except Exception as e:
+                    print(f"[JARVIS] ❌ Play: {e}")
+                    if self._audio_gen == gen and dev is not None:
+                        # Stale device (headset unplugged) → drop to default
+                        print("[JARVIS] Play device unavailable — using default")
+                        self._audio_devices = (self._audio_devices[0], None)
+                        self._audio_gen += 1
+                        await asyncio.sleep(1.0)
+                        continue
+                    raise
 
             try:
                 while self._audio_gen == gen:
@@ -1829,6 +1861,10 @@ class JarvisLive:
                         except asyncio.QueueEmpty:
                             break
 
+                    if stream is None:
+                        # Phone Headphones Mode — the phone plays this audio;
+                        # just keep consuming so the queue never fills.
+                        continue
                     try:
                         await asyncio.to_thread(stream.write, bytes(batch))
                     except (RuntimeError, asyncio.CancelledError):
@@ -1837,14 +1873,15 @@ class JarvisLive:
                         break      # device swap in progress — reopen stream
             finally:
                 self.set_speaking(False)
-                try:
-                    stream.stop()
-                except Exception:
-                    pass
-                try:
-                    stream.close()
-                except Exception:
-                    pass
+                if stream is not None:
+                    try:
+                        stream.stop()
+                    except Exception:
+                        pass
+                    try:
+                        stream.close()
+                    except Exception:
+                        pass
 
     # ── Morning briefing ────────────────────────────────────────────────────────
 
@@ -2434,6 +2471,7 @@ class JarvisLive:
             self._dashboard.set_holo_callback(self.ui.show_holo_project)
             self._dashboard.set_headphones_callback(self._dashboard_headphones_cb)
             self._dashboard.set_headphones_button_callback(self._on_phone_headphone_button)
+            self._dashboard.set_phone_headphones_callback(self._set_phone_headphones_mode)
             asyncio.create_task(self._dashboard.serve())
             # Wire the Remote overlay's device hub (list + kick + revoke)
             def _kick_device(did: str) -> None:
