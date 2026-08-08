@@ -1026,6 +1026,7 @@
           _hpAudio = new Audio(_silentWavUrl());
           _hpAudio.loop = true;
           _hpAudio.volume = 0;
+          _hpAudio.muted = true;   // guaranteed silence (some Androids ignore volume=0 over BT)
           _hpAudio.play().catch(() => {});
         }
       } catch (_) {}
@@ -1303,13 +1304,16 @@
           src.connect(nd);
           _audioNd = nd;
         } catch (_) {
-          // ScriptProcessor fallback (deprecated, still works everywhere)
+          // ScriptProcessor fallback (deprecated, still works everywhere).
+          // IMPORTANT: do NOT connect to ctx.destination — that would play
+          // the mic into the speaker/earbuds and the user would hear EDIT's
+          // own voice twice (direct + echoed through the headset mic).
           const sp = ctx.createScriptProcessor(4096, 1, 1);
           sp.onaudioprocess = e => {
             if (_spkActive()) return;   // don't echo JARVIS's own voice back to him
             if (ws.readyState === 1) ws.send(_f32toPcm16(e.inputBuffer.getChannelData(0), rate));
           };
-          src.connect(sp); sp.connect(ctx.destination);
+          src.connect(sp);
           _audioNd = sp;
         }
 
