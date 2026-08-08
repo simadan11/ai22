@@ -19,6 +19,8 @@ import string
 import time
 from pathlib import Path
 
+from actions.holo_lab import PART_CATALOG, normalize_part_ids
+
 _DEPS_OK = False
 try:
     from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Request
@@ -558,6 +560,7 @@ class DashboardServer:
         self._command_queue               = asyncio.Queue()
         self._wake_callback               = None
         self._connect_callback            = None
+        self._holo_callback               = None
         self._pending_keys: dict[str, float] = {}
         self._device_sessions: dict[str, dict] = {}  # device_token → {session_key}
         self._phone_audio_queue: asyncio.Queue    = asyncio.Queue(maxsize=200)
@@ -565,6 +568,10 @@ class DashboardServer:
         self._phone_cam_queue: asyncio.Queue      = asyncio.Queue(maxsize=2)  # live stream → PC HUD
         self._cam_stream_active: bool             = False
         self._audio_out_queue: asyncio.Queue      = asyncio.Queue(maxsize=400)  # JARVIS voice → phones
+        # Holo Lab projects are intentionally session-scoped: a design is a
+        # visual prototype, not a claim that a physical hologram or wearable
+        # has been manufactured.
+        self._holo_projects: list[dict]            = []
         self._uploads_dir                 = UPLOADS_DIR
         self._login_html                  = _read("login.html")
         self._app_html                    = _read("app.html")
@@ -615,6 +622,118 @@ class DashboardServer:
 
     def set_connect_callback(self, fn) -> None:
         self._connect_callback = fn
+
+    def set_holo_callback(self, fn) -> None:
+        """Called when a dashboard or voice command creates a Holo project."""
+        self._holo_callback = fn
+
+    def create_holo_project(
+        self,
+        model: str = "glasses",
+        mode: str = "holo",
+        name: str = "",
+        clarity: int = 85,
+        notes: str = "",
+        components=None,
+        subject: str = "",
+        blueprint: str = "",
+        geometry=None,
+        parts=None,
+    ) -> dict:
+        """Create one sanitized, session-scoped visual prototype for any subject."""
+        allowed_models = {"glasses", "glove", "suit", "custom"}
+        allowed_modes = {"holo", "wireframe", "exploded", "clear"}
+        model = str(model or "glasses").lower().strip()
+        mode = str(mode or "holo").lower().strip()
+        if model not in allowed_models:
+            raise ValueError("Unknown prototype")
+        if mode not in allowed_modes:
+            raise ValueError("Unknown display mode")
+
+        def _clean(value, limit: int, fallback: str) -> str:
+            text = re.sub(r"[\x00-\x1f\x7f]", " ", str(value or ""))
+            text = re.sub(r"\s+", " ", text).strip()
+            return text[:limit] or fallback
+
+        try:
+            clarity = int(clarity)
+        except (TypeError, ValueError):
+            clarity = 85
+        default_components = {
+            "glasses": ["OPTICAL CAMERA", "HUD LENS", "EDGE SENSOR", "TEMPLE COMPUTE + BATTERY"],
+            "glove": ["PALM DISPLAY", "FINGER SENSORS", "WRIST CAMERA", "REMOVABLE POWER MODULE"],
+            "suit": ["CHEST SENSOR CORE", "HEAD OPTICS", "MOTION SENSORS", "SERVICE PORT"],
+            "custom": ["AI GEOMETRY PRIMITIVES", "DISPLAY / PROJECTION CORE", "SENSOR ARRAY", "POWER + DATA MODULE"],
+        }
+        raw_components = components if isinstance(components, (list, tuple)) else []
+        clean_components = [_clean(item, 72, "COMPONENT") for item in raw_components[:16]]
+        if not clean_components:
+            clean_components = default_components[model]
+
+        def _number(value, fallback, low, high):
+            try:
+                number = float(value)
+            except (TypeError, ValueError):
+                number = fallback
+            return max(low, min(high, number))
+
+        primitive_types = {"box", "cylinder", "sphere", "ring", "line", "point", "cone", "plane"}
+        clean_geometry = []
+        if isinstance(geometry, (list, tuple)):
+            for raw in geometry[:32]:
+                if not isinstance(raw, dict):
+                    continue
+                kind = str(raw.get("type") or "box").lower().strip()
+                if kind not in primitive_types:
+                    continue
+                item = {
+                    "type": kind,
+                    "x": _number(raw.get("x"), 500, 0, 1000),
+                    "y": _number(raw.get("y"), 500, 0, 1000),
+                    "z": _number(raw.get("z"), 0, -500, 500),
+                    "w": _number(raw.get("w"), 140, 4, 700),
+                    "h": _number(raw.get("h"), 100, 4, 700),
+                    "d": _number(raw.get("d"), 70, 0, 500),
+                    "rotation": _number(raw.get("rotation"), 0, -180, 180),
+                    "scale": _number(raw.get("scale"), 1, 0.05, 10),
+                    "mm_w": _number(raw.get("mm_w"), 0, 0, 2000),
+                    "mm_h": _number(raw.get("mm_h"), 0, 0, 2000),
+                    "mm_d": _number(raw.get("mm_d"), 0, 0, 2000),
+                    "part_id": normalize_part_ids([raw.get("part_id")])[0] if normalize_part_ids([raw.get("part_id")]) else "",
+                    "label": _clean(raw.get("label"), 48, ""),
+                }
+                if kind == "line":
+                    item.update({
+                        "x2": _number(raw.get("x2"), item["x"] + item["w"], 0, 1000),
+                        "y2": _number(raw.get("y2"), item["y"] + item["h"], 0, 1000),
+                        "z2": _number(raw.get("z2"), item["z"], -500, 500),
+                    })
+                clean_geometry.append(item)
+        if model == "custom" and not clean_geometry:
+            clean_geometry = [
+                {"type": "ring", "x": 500, "y": 500, "z": 0, "w": 270, "h": 270, "d": 0, "rotation": 0, "label": "CORE FIELD"},
+                {"type": "box", "x": 500, "y": 500, "z": 20, "w": 170, "h": 120, "d": 90, "rotation": 0, "label": "AI CORE"},
+                {"type": "sphere", "x": 500, "y": 340, "z": 60, "w": 95, "h": 95, "d": 95, "rotation": 0, "label": "SENSOR"},
+            ]
+        clean_subject = _clean(subject, 120, "custom hologram object" if model == "custom" else "")
+        clean_blueprint = _clean(blueprint, 1200, "")
+        project = {
+            "id": "HOLO-" + secrets.token_hex(3).upper(),
+            "name": _clean(name, 64, "Untitled hologram prototype"),
+            "model": model,
+            "subject": clean_subject,
+            "mode": mode,
+            "clarity": max(35, min(100, clarity)),
+            "notes": _clean(notes, 600, ""),
+            "blueprint": clean_blueprint,
+            "components": clean_components,
+            "geometry": clean_geometry,
+            "parts": normalize_part_ids(parts),
+            "created_at": int(time.time()),
+        }
+        self._holo_projects.append(project)
+        self._holo_projects = self._holo_projects[-20:]
+        return project
 
     # ── JARVIS voice → phones ─────────────────────────────────────────────
 
@@ -947,6 +1066,62 @@ class DashboardServer:
                     msg = msg[:200]
                 return JSONResponse({"ok": False, "error": msg}, status_code=502)
             return JSONResponse({"ok": True, "detections": detections})
+
+        # ── Holo Lab — safe wearable prototype records ───────────────────────
+
+        @app.post("/api/holo-project")
+        async def create_holo_project(req: Request):
+            """Create a session-scoped visual prototype for the Holo Lab.
+
+            The endpoint deliberately stores only a small, sanitized design
+            record. It does not drive hardware, transmit camera data, or
+            pretend to manufacture a physical hologram.
+            """
+            if not _auth(req):
+                return JSONResponse({"ok": False, "error": "Unauthorized"}, status_code=401)
+            try:
+                body = await req.json()
+            except Exception:
+                return JSONResponse({"ok": False, "error": "Bad JSON"}, status_code=400)
+            if not isinstance(body, dict):
+                return JSONResponse({"ok": False, "error": "JSON object required"}, status_code=400)
+
+            try:
+                project = self.create_holo_project(
+                    model=body.get("model", "glasses"),
+                    mode=body.get("mode", "holo"),
+                    name=body.get("name", ""),
+                    clarity=body.get("clarity", 85),
+                    notes=body.get("notes", ""),
+                    components=body.get("components"),
+                    subject=body.get("subject", ""),
+                    blueprint=body.get("blueprint", ""),
+                    geometry=body.get("geometry"),
+                    parts=body.get("parts"),
+                )
+            except ValueError as exc:
+                return JSONResponse({"ok": False, "error": str(exc)}, status_code=400)
+            if self._holo_callback:
+                try:
+                    self._holo_callback(project)
+                except Exception as exc:
+                    print(f"[Dashboard] Holo PC callback failed: {exc}")
+            await self.broadcast({"type": "holo_project", "project": project})
+            return JSONResponse({"ok": True, "project": project})
+
+        @app.get("/api/holo-projects")
+        async def list_holo_projects(req: Request):
+            """Return prototypes created during this dashboard session."""
+            if not _auth(req):
+                return JSONResponse({"ok": False, "error": "Unauthorized"}, status_code=401)
+            return JSONResponse({"ok": True, "projects": list(self._holo_projects)})
+
+        @app.get("/api/holo-parts")
+        async def list_holo_parts(req: Request):
+            """Return the offline buy/make/test catalog for the remote lab."""
+            if not _auth(req):
+                return JSONResponse({"ok": False, "error": "Unauthorized"}, status_code=401)
+            return JSONResponse({"ok": True, "parts": list(PART_CATALOG)})
 
         # ── Phone camera live stream → PC HUD ─────────────────────────────────
 
