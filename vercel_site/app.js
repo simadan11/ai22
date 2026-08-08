@@ -110,7 +110,6 @@
     const p = pass.value.trim();
     const k = apiKey.value.trim();
     if (!p) { loginErr.textContent = "Введи пароль"; return; }
-    if (!k) { loginErr.textContent = "Введи API-ключ Gemini"; return; }
     loginBtn.disabled = true;
     loginBtn.textContent = "Проверка…";
     loginErr.textContent = "";
@@ -125,7 +124,7 @@
         password = p;
         apiKeySaved = k;
         sessionStorage.setItem("edit_pass", p);
-        sessionStorage.setItem("edit_apikey", k);
+        if (k) sessionStorage.setItem("edit_apikey", k);
         showApp();
       } else if (r.status === 401) {
         loginErr.textContent = "Неверный пароль";

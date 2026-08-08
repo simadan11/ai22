@@ -66,6 +66,7 @@ html, body {
 
 .field { text-align:left; margin-bottom:16px; }
 .field label { display:block; font-size:11px; font-weight:700; letter-spacing:1.5px; text-transform:uppercase; color:var(--muted); margin-bottom:7px; }
+.field label .opt { text-transform:none; letter-spacing:.3px; font-weight:500; opacity:.75; }
 .field-row { position:relative; }
 .field-row .eye { position:absolute; right:8px; top:50%; transform:translateY(-50%); background:none; border:none; font-size:16px; cursor:pointer; opacity:.6; padding:6px; }
 .input {

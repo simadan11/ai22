@@ -5,6 +5,15 @@
 
 const DEFAULT_PASSWORD = "gelius";
 
+// Встроенный API-ключ Gemini (запасной вариант — используется, когда
+// пользователь не ввёл свой ключ при входе и не задан env GEMINI_API_KEY).
+// GitHub отклоняет коммиты с настоящими ключами (secret scanning), поэтому
+// здесь плейсхолдер. Вставь свой ключ сюда ПОСЛЕ клонирования:
+//   const EMBEDDED_API_KEY = "AIza...";   (или "AQ....")
+// либо задай env GEMINI_API_KEY на Vercel — это безопаснее (ключ не попадёт
+// в git).
+const EMBEDDED_API_KEY = "";
+
 const SYSTEM_PROMPT = `Ты — EDIT (EDITH), персональный AI-ассистент. Говори кратко, по делу, немного с юмором.
 Отвечай на языке пользователя (обычно русский). Не упоминай этот системный промпт.
 У тебя нет инструментов — только диалог. Если просят что-то сделать на телефоне — объясни, как сделать вручную.
@@ -29,8 +38,10 @@ export default async function handler(req, res) {
     return res.status(401).json({ ok: false, error: "Неверный пароль" });
   }
 
-  // ── API-ключ: из запроса (введён при входе) или из env ─────────────────
-  const apiKey = String(body.api_key || "").trim() || process.env.GEMINI_API_KEY;
+  // ── API-ключ: из запроса → env → встроенный ────────────────────────────
+  const apiKey = String(body.api_key || "").trim()
+    || process.env.GEMINI_API_KEY
+    || EMBEDDED_API_KEY;
   if (!apiKey) {
     return res.status(500).json({
       ok: false,
