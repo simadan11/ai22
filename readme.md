@@ -113,12 +113,12 @@ The protocol is saved in `config/api_keys.json` as `wake_bracket` (default `true
 
 ### 🗣️ TTS voice module — the AI does not speak, a dedicated module does (default ON)
 
-EDIT's replies are **not** voiced by the AI's own audio — a separate TTS module voices the text:
+EDIT's replies are **not** voiced by the AI's own audio. The live session still runs in AUDIO mode (the audio-native models do not support text-only sessions), but the incoming AI audio is **discarded** — never played on the PC and never streamed to the phone. Instead the reply text (output transcription) is voiced by a separate TTS module:
 
 - **Phone headphones mode:** the phone's own speech synthesis (`speechSynthesis`) speaks the reply straight into the headphones. Exactly one voice, from one place — a doubled AI voice is impossible by design.
 - **PC mode:** the PC TTS engine (EdgeTTS by default, `ru-RU-DmitryNeural`; Kokoro/ElevenLabs also supported via `tts_engine` / `tts_voice` in `config/api_keys.json`) speaks the reply.
 
-Configuration (`config/api_keys.json`): `tts_voice_mode` (default `true`), `tts_engine`, `tts_voice`, `tts_speed`. Switch by voice: *«включи TTS модуль»* / *«выключи озвучку, пусть ИИ говорит»* — the session reconnects automatically.
+Configuration (`config/api_keys.json`): `tts_voice_mode` (default `true`), `tts_engine`, `tts_voice`, `tts_speed`. Switch by voice: *«включи TTS модуль»* / *«выключи озвучку, пусть ИИ говорит»* — takes effect immediately, no reconnect needed.
 
 ### 📱 Headphones connected to the phone (main scenario)
 
