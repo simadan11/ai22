@@ -90,6 +90,7 @@ from actions.social_osint      import social_osint
 from actions.background_monitor import (
     add_monitor, remove_monitor, list_monitors, check_all as monitor_check_all,
 )
+from actions.headphones import HeadphonesManager
 from actions.web_search        import _news as _fetch_news_sync
 from memory.config_manager     import get_brief_enabled
 from core.model_router         import print_model_status, is_local_mode
@@ -635,6 +636,32 @@ TOOL_DECLARATIONS = [
         }
     },
     {
+        "name": "headphones_mode",
+        "description": (
+            "Toggles Headphones Mode (режим наушников): EDIT's voice is routed "
+            "through Bluetooth headphones connected to the PC, the microphone is "
+            "routed through the headset mic, and pressing the button on the "
+            "headphones makes EDIT stop talking and listen (push-to-listen). "
+            "Call when the user says: headphones mode on/off, включи/выключи "
+            "режим наушников, наушники, bluetooth headphones, listen through "
+            "headphones, etc."
+        ),
+        "parameters": {
+            "type": "OBJECT",
+            "properties": {
+                "enabled": {
+                    "type": "BOOLEAN",
+                    "description": "True to enable, false to disable. Omit to just check status."
+                },
+                "status_only": {
+                    "type": "BOOLEAN",
+                    "description": "True to only report whether Bluetooth headphones are connected and whether the mode is on (no change)."
+                }
+            },
+            "required": []
+        }
+    },
+    {
     "name": "file_processor",
     "description": (
         "Processes any file that the user has uploaded or dropped onto the interface. "
@@ -902,6 +929,18 @@ class JarvisLive:
         self.ui.on_remote_clicked = self._make_remote_key
         self.ui.on_interrupt      = self.interrupt
         self._turn_done_event: asyncio.Event | None = None
+
+        # ── Headphones mode (🎧) ──────────────────────────────────────────
+        # Audio devices used by the live mic/playback streams: (input_idx, output_idx).
+        # None = OS default.  Bumped every time the routing changes so the
+        # _listen_audio / _play_audio loops reopen their streams.
+        self._headphones    = HeadphonesManager(
+            on_button=self._on_headphone_button,
+            on_status_changed=self._on_headphone_status_changed,
+        )
+        self._audio_devices = (None, None)
+        self._audio_gen     = 0
+        self.ui.on_headphones_toggle = self._ui_toggle_headphones
         self._dashboard     = None
         self._briefing_sent    = False          # morning briefing fires once per process
         self._sys_monitor      = SystemMonitor()  # persistent cooldown state
@@ -959,6 +998,175 @@ class JarvisLive:
         if self._turn_done_event:
             self._turn_done_event.clear()
         self.ui.write_log("SYS: Interrupted — listening...")
+
+    # ── Headphones mode (🎧) ────────────────────────────────────────────────
+    # Flow: the UI toggle or the Remote Dashboard button calls
+    #   _ui_toggle_headphones / _dashboard_headphones_cb → _headphones_toggle_task.
+    # Routing is applied by HeadphonesManager (sd.default + device indices),
+    # the live streams reopen via self._audio_gen, and the headphone's own
+    # multifunction button triggers _on_headphone_button → interrupt + listen.
+
+    def _ui_toggle_headphones(self) -> None:
+        """Called from the Qt thread when the 🎧 button is pressed."""
+        if not self._loop:
+            return
+        try:
+            asyncio.run_coroutine_threadsafe(
+                self._headphones_toggle_task(), self._loop
+            )
+        except Exception as e:
+            print(f"[Headphones] UI toggle error: {e}")
+
+    async def _dashboard_headphones_cb(self, enabled: bool | None = None) -> dict:
+        """Async callback for the Remote Dashboard /api/headphones endpoint."""
+        if enabled is None:
+            return self._headphones.status()
+        return await self._headphones_toggle_task(bool(enabled))
+
+    async def _headphones_toggle_task(self, enabled: bool | None = None) -> dict:
+        """Turn headphone mode on/off and push the new status everywhere."""
+        try:
+            if enabled is None:
+                enabled = not self._headphones.enabled
+            status = await asyncio.to_thread(
+                self._headphones.set_enabled, bool(enabled)
+            )
+            self._apply_headphone_audio(status)
+            self.ui.update_headphones_btn(status)
+
+            if enabled:
+                if status.get("connected"):
+                    name = status.get("name") or "Bluetooth headphones"
+                    self.ui.write_log(f"🎧 Headphones mode: ON — {name}")
+                else:
+                    self.ui.write_log(
+                        "🎧 Headphones mode: ON — Bluetooth headphones not "
+                        "detected, audio stays on the default devices"
+                    )
+            else:
+                self.ui.write_log(
+                    "🎧 Headphones mode: OFF — audio back to default devices"
+                )
+
+            # Persist the preference so it survives restarts
+            self._save_headphones_pref(bool(enabled))
+
+            if self._dashboard:
+                try:
+                    await self._dashboard.broadcast(
+                        {"type": "headphones", "status": status}
+                    )
+                except Exception:
+                    pass
+            return status
+        except Exception as e:
+            print(f"[Headphones] Toggle error: {e}")
+            traceback.print_exc()
+            return self._headphones.status()
+
+    def _apply_headphone_audio(self, status: dict | None = None) -> None:
+        """Point the live mic/playback streams at the headphone devices."""
+        if status is None:
+            status = self._headphones.status()
+        if status.get("enabled") and status.get("connected"):
+            self._audio_devices = (
+                status.get("input_idx"),
+                status.get("output_idx"),
+            )
+        else:
+            self._audio_devices = (None, None)
+        self._audio_gen += 1   # _listen_audio / _play_audio reopen their streams
+
+    def _save_headphones_pref(self, enabled: bool) -> None:
+        try:
+            with open(API_CONFIG_PATH, "r+", encoding="utf-8") as f:
+                cfg = json.load(f)
+                cfg["headphones_mode"] = bool(enabled)
+                f.seek(0)
+                json.dump(cfg, f, indent=4, ensure_ascii=False)
+                f.truncate()
+        except Exception:
+            pass
+
+    def _load_headphones_pref(self) -> bool:
+        try:
+            with open(API_CONFIG_PATH, "r", encoding="utf-8") as f:
+                return bool(json.load(f).get("headphones_mode", False))
+        except Exception:
+            return False
+
+    def _on_headphone_button(self) -> None:
+        """Headphone multifunction button pressed (AVRCP play/pause).
+
+        EDIT stops talking and opens the mic — push-to-listen through the
+        headset.  Runs in the keyboard-hook thread; marshal into the loop.
+        """
+        if not self._headphones.enabled or not self._loop:
+            return
+        try:
+            asyncio.run_coroutine_threadsafe(
+                self._headphone_button_task(), self._loop
+            )
+        except Exception as e:
+            print(f"[Headphones] Button relay error: {e}")
+
+    async def _headphone_button_task(self) -> None:
+        with self._speaking_lock:
+            was_speaking = self._is_speaking
+        turn_already_done = bool(
+            self._turn_done_event and self._turn_done_event.is_set()
+        )
+        audio_in_flight = bool(
+            self.audio_in_queue is not None and not self.audio_in_queue.empty()
+        )
+        self.interrupt()
+
+        # interrupt() sets self._interrupted so the in-flight response audio is
+        # discarded until the interrupted turn completes.  But if EDIT was
+        # silent (or that turn already completed) no new turn_complete will
+        # arrive, and a stuck flag would mute the user's NEXT reply — so clear
+        # it right away in that case.  For a genuine mid-turn interrupt we keep
+        # discarding (fast path: turn_complete clears the flag) with a 6 s
+        # safety net in case Gemini never finishes the turn.
+        if not was_speaking and not audio_in_flight:
+            self._interrupted = False
+        elif turn_already_done:
+            self._interrupted = False
+        else:
+            async def _safety_clear():
+                await asyncio.sleep(6.0)
+                self._interrupted = False
+            asyncio.create_task(_safety_clear())
+
+        self.ui.write_log("🎧 Headphone button — EDIT listening…")
+        if self._dashboard:
+            try:
+                await self._dashboard.broadcast(
+                    {"type": "headphones", "action": "listen"}
+                )
+            except Exception:
+                pass
+
+    def _on_headphone_status_changed(self, status: dict) -> None:
+        """Called by HeadphonesManager's monitor when BT devices (dis)connect."""
+        try:
+            self._apply_headphone_audio(status)
+            self.ui.update_headphones_btn(status)
+            if self._loop:
+                asyncio.run_coroutine_threadsafe(
+                    self._broadcast_headphone_status(status), self._loop
+                )
+        except Exception as e:
+            print(f"[Headphones] Status change error: {e}")
+
+    async def _broadcast_headphone_status(self, status: dict) -> None:
+        if self._dashboard:
+            try:
+                await self._dashboard.broadcast(
+                    {"type": "headphones", "status": status}
+                )
+            except Exception:
+                pass
 
     def speak(self, text: str):
         if not self._loop or not self.session:
@@ -1330,6 +1538,31 @@ class JarvisLive:
                     _os._exit(0)
                 asyncio.create_task(_do_shutdown())
 
+            elif name == "headphones_mode":
+                if args.get("status_only"):
+                    status = self._headphones.status()
+                else:
+                    status = await self._headphones_toggle_task(
+                        bool(args.get("enabled", not self._headphones.enabled))
+                    )
+                if status.get("enabled"):
+                    if status.get("connected"):
+                        result = (
+                            "Headphones mode is ON. EDIT speaks through "
+                            f"{status.get('name') or 'Bluetooth headphones'} "
+                            "and hears you through the headset mic. "
+                            "Press the button on the headphones to make me listen."
+                        )
+                    else:
+                        result = (
+                            "Headphones mode is ON, but no Bluetooth headphones "
+                            "are currently connected — audio stays on the default "
+                            "devices. Connect them and I will switch automatically."
+                        )
+                else:
+                    result = "Headphones mode is OFF — audio uses the default devices."
+                self.ui.update_headphones_btn(status)
+
             else:
                 from actions.self_improve import is_custom_skill, run_custom_skill
                 if is_custom_skill(name):
@@ -1371,20 +1604,36 @@ class JarvisLive:
                     {"data": data, "mime_type": "audio/pcm"}
                 )
 
-        try:
-            with sd.InputStream(
-                samplerate=SEND_SAMPLE_RATE,
-                channels=CHANNELS,
-                dtype="int16",
-                blocksize=CHUNK_SIZE,
-                callback=callback,
-            ):
-                print("[JARVIS] 🎤 Mic stream open")
-                while True:
-                    await asyncio.sleep(0.1)
-        except Exception as e:
-            print(f"[JARVIS] ❌ Mic: {e}")
-            raise
+        # Device-aware loop: restarts the stream with a new device whenever
+        # headphone mode reroutes the audio (self._audio_gen changes).
+        while True:
+            gen = self._audio_gen
+            dev = self._audio_devices[0] if self._audio_devices else None
+            try:
+                with sd.InputStream(
+                    device=dev,
+                    samplerate=SEND_SAMPLE_RATE,
+                    channels=CHANNELS,
+                    dtype="int16",
+                    blocksize=CHUNK_SIZE,
+                    callback=callback,
+                ):
+                    print(f"[JARVIS] 🎤 Mic stream open (device={dev})")
+                    while self._audio_gen == gen:
+                        await asyncio.sleep(0.1)
+            except asyncio.CancelledError:
+                raise
+            except Exception as e:
+                print(f"[JARVIS] ❌ Mic: {e}")
+                if self._audio_gen == gen:
+                    if dev is not None:
+                        # Stale device (headset unplugged) → drop to default
+                        print("[JARVIS] Mic device unavailable — using default")
+                        self._audio_devices = (None, self._audio_devices[1])
+                        self._audio_gen += 1
+                        await asyncio.sleep(1.0)
+                        continue
+                    raise
 
     async def _receive_audio(self):
         print("[JARVIS] 👂 Recv started")
@@ -1509,54 +1758,76 @@ class JarvisLive:
     async def _play_audio(self):
         print("[JARVIS] 🔊 Play started")
 
-        stream = sd.RawOutputStream(
-            samplerate=RECEIVE_SAMPLE_RATE,
-            channels=CHANNELS,
-            dtype="int16",
-            blocksize=CHUNK_SIZE,
-        )
-        stream.start()
-
-        try:
-            while True:
-                try:
-                    chunk = await asyncio.wait_for(
-                        self.audio_in_queue.get(),
-                        timeout=0.1
-                    )
-                except asyncio.TimeoutError:
-                    if (
-                        self._turn_done_event
-                        and self._turn_done_event.is_set()
-                        and self.audio_in_queue.empty()
-                    ):
-                        self.set_speaking(False)
-                        self._turn_done_event.clear()
+        # Device-aware loop: restarts the stream whenever headphone mode
+        # reroutes the audio (self._audio_gen changes).
+        while True:
+            gen = self._audio_gen
+            dev = self._audio_devices[1] if self._audio_devices else None
+            try:
+                stream = sd.RawOutputStream(
+                    device=dev,
+                    samplerate=RECEIVE_SAMPLE_RATE,
+                    channels=CHANNELS,
+                    dtype="int16",
+                    blocksize=CHUNK_SIZE,
+                )
+                stream.start()
+            except Exception as e:
+                print(f"[JARVIS] ❌ Play: {e}")
+                if self._audio_gen == gen and dev is not None:
+                    # Stale device (headset unplugged) → drop to default
+                    print("[JARVIS] Play device unavailable — using default")
+                    self._audio_devices = (self._audio_devices[0], None)
+                    self._audio_gen += 1
+                    await asyncio.sleep(1.0)
                     continue
+                raise
 
-                self.set_speaking(True)
-
-                # Batch all immediately-available chunks into one write to reduce
-                # thread-pool round-trips (was one asyncio.to_thread per 50ms slice).
-                # Cap at ~200 ms so interrupt() still stops audio within ~200 ms.
-                batch = bytearray(chunk)
-                while len(batch) < 9600:   # 9600 bytes ≈ 200 ms at 24 kHz / 16-bit mono
+            try:
+                while self._audio_gen == gen:
                     try:
-                        batch.extend(self.audio_in_queue.get_nowait())
-                    except asyncio.QueueEmpty:
-                        break
+                        chunk = await asyncio.wait_for(
+                            self.audio_in_queue.get(),
+                            timeout=0.1
+                        )
+                    except asyncio.TimeoutError:
+                        if (
+                            self._turn_done_event
+                            and self._turn_done_event.is_set()
+                            and self.audio_in_queue.empty()
+                        ):
+                            self.set_speaking(False)
+                            self._turn_done_event.clear()
+                        continue
 
+                    self.set_speaking(True)
+
+                    # Batch all immediately-available chunks into one write to reduce
+                    # thread-pool round-trips (was one asyncio.to_thread per 50ms slice).
+                    # Cap at ~200 ms so interrupt() still stops audio within ~200 ms.
+                    batch = bytearray(chunk)
+                    while len(batch) < 9600:   # 9600 bytes ≈ 200 ms at 24 kHz / 16-bit mono
+                        try:
+                            batch.extend(self.audio_in_queue.get_nowait())
+                        except asyncio.QueueEmpty:
+                            break
+
+                    try:
+                        await asyncio.to_thread(stream.write, bytes(batch))
+                    except (RuntimeError, asyncio.CancelledError):
+                        if self._audio_gen == gen:
+                            raise   # executor shutting down — exit cleanly
+                        break      # device swap in progress — reopen stream
+            finally:
+                self.set_speaking(False)
                 try:
-                    await asyncio.to_thread(stream.write, bytes(batch))
-                except (RuntimeError, asyncio.CancelledError):
-                    break   # executor shutting down — exit cleanly
-        except Exception as e:
-            print(f"[JARVIS] ❌ Play: {e}")
-            raise
-        finally:
-            self.set_speaking(False)
-            stream.stop()
-            stream.close()
+                    stream.stop()
+                except Exception:
+                    pass
+                try:
+                    stream.close()
+                except Exception:
+                    pass
 
     # ── Morning briefing ────────────────────────────────────────────────────────
 
@@ -2144,6 +2415,7 @@ class JarvisLive:
             self._dashboard = DashboardServer()
             self._dashboard.set_connect_callback(self._on_phone_connected)
             self._dashboard.set_holo_callback(self.ui.show_holo_project)
+            self._dashboard.set_headphones_callback(self._dashboard_headphones_cb)
             asyncio.create_task(self._dashboard.serve())
             # Wire the Remote overlay's device hub (list + kick + revoke)
             def _kick_device(did: str) -> None:
@@ -2165,6 +2437,11 @@ class JarvisLive:
         except Exception as e:
             print(f"[Dashboard] Disabled: {e}")
             self._dashboard = None
+
+        # Headphones mode — re-apply persisted preference at startup so the
+        # routing is active before the first session connects
+        if self._load_headphones_pref():
+            asyncio.create_task(self._headphones_toggle_task(True))
 
         while True:
             try:
