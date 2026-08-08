@@ -978,19 +978,19 @@ class _TTSBridge:
       • stream_cb=None  — voices text through the engine's own player on a
         strict FIFO worker thread (PC speakers).
       • stream_cb=fn    — JARVIS VOICE MODULE: synthesises with a deep
-        British male EdgeTTS voice ("en-GB-RyanNeural") and streams the PCM
+        Russian male EdgeTTS voice ("ru-RU-DmitryNeural") and streams the PCM
         to the phone's single audio-sink tab (Bluetooth headphones), so the
         phone gets a proper Jarvis-quality neural voice.
 
     Either way the AI (Gemini Live) does NOT speak — exactly one voice.
     """
 
-    def __init__(self, stream_cb=None, voice: str = "en-GB-RyanNeural"):
+    def __init__(self, stream_cb=None, voice: str = "ru-RU-DmitryNeural"):
         self._q = queue.Queue()
         self._player = None
         self._lock = threading.Lock()
         self._stream_cb = stream_cb          # callable(bytes) → dashboard sink
-        self._voice = voice or "en-GB-RyanNeural"
+        self._voice = voice or "ru-RU-DmitryNeural"
         self._streaming = False              # True while streaming to the phone
         self._cancelled = False
         self._thread = threading.Thread(
@@ -1339,10 +1339,10 @@ class JarvisLive:
         try:
             with open(API_CONFIG_PATH, "r", encoding="utf-8") as f:
                 return str(
-                    json.load(f).get("tts_jarvis_voice", "en-GB-RyanNeural")
-                ).strip() or "en-GB-RyanNeural"
+                    json.load(f).get("tts_jarvis_voice", "ru-RU-DmitryNeural")
+                ).strip() or "ru-RU-DmitryNeural"
         except Exception:
-            return "en-GB-RyanNeural"
+            return "ru-RU-DmitryNeural"
 
     def _save_tts_voice_mode(self, enabled: bool) -> None:
         try:

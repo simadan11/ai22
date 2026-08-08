@@ -114,11 +114,11 @@ The protocol is saved in `config/api_keys.json` as `wake_bracket` (default `true
 ### 🗣️ Voice: PC speaks as always, phone headphones use the Jarvis Voice Module
 
 - **On the PC — the voice is as always:** the AI's own audio plays through the PC speakers (default). No TTS module involved.
-- **Phone headphones mode — improved Jarvis Voice Module:** the AI's audio is discarded and the reply text is voiced by a dedicated module with a **Jarvis-quality voice** — deep British male neural voice **en-GB-RyanNeural** (EdgeTTS), synthesised on the PC and streamed as PCM to the phone's single sink tab (= your headphones). Exactly one voice, never two; no robotic phone TTS.
+- **Phone headphones mode — improved Jarvis Voice Module:** the AI's audio is discarded and the reply text is voiced by a dedicated module with a **Jarvis-quality Russian voice** — deep male neural voice **ru-RU-DmitryNeural** (EdgeTTS), synthesised on the PC and streamed as PCM to the phone's single sink tab (= your headphones). Exactly one voice, never two; no robotic phone TTS. The replies are generated in Russian anyway, so the Russian voice matches.
   - Fallback: if `edge-tts`/`miniaudio` are not installed, the phone's own `speechSynthesis` is used instead.
   - The headphone button / saying «EDIT» stops the Jarvis voice instantly.
 
-Configuration (`config/api_keys.json`): `tts_jarvis_voice` (default `en-GB-RyanNeural` — pick any EdgeTTS voice, e.g. `en-US-ChristopherNeural`, `en-GB-ThomasNeural`). The optional PC TTS mode (`tts_voice_mode`, default `false`) is toggled by voice: *«включи TTS модуль»* / *«пусть ИИ говорит как всегда»*.
+Configuration (`config/api_keys.json`): `tts_jarvis_voice` (default `ru-RU-DmitryNeural` — pick any EdgeTTS voice, e.g. `ru-RU-SvetlanaNeural` female, `en-GB-RyanNeural` for English Jarvis). The optional PC TTS mode (`tts_voice_mode`, default `false`) is toggled by voice: *«включи TTS модуль»* / *«пусть ИИ говорит как всегда»*.
 
 ### 📱 Headphones connected to the phone (main scenario)
 
@@ -127,7 +127,7 @@ Configuration (`config/api_keys.json`): `tts_jarvis_voice` (default `en-GB-RyanN
 3. Press the **button on your Bluetooth headphones** — EDIT instantly stops talking and listens to you through the headset:
    - the press is caught by the phone (browser media session → `/api/headphones/button`);
    - the phone streams its microphone (the headset mic) to the PC, so EDIT hears you;
-   - EDIT's reply is voiced by the **Jarvis Voice Module** (deep British male neural voice) straight into your headphones.
+   - EDIT's reply is voiced by the **Jarvis Voice Module** (deep Russian male neural voice, ru-RU-DmitryNeural) straight into your headphones.
 
 Notes:
 
