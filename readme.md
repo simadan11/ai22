@@ -45,7 +45,7 @@ It's not just an assistant — it's an extension of your digital life.
 | 🖱️ Desktop Control | Taskbar, window management, and desktop-level operations |
 | 🧑‍💻 Silent Language Memory | Detects spoken language on first use — all future sessions adapt automatically |
 | 📱 Remote Dashboard | Control the assistant from your phone via QR code pairing |
-| 🎧 Headphones Mode | Route EDIT's voice through Bluetooth headphones, hear you via the headset mic, and use the headphone's own button as push-to-listen — toggled from the PC UI, the Remote Dashboard or by voice |
+| 🎧 Headphones Mode | Bluetooth headphones paired to the phone or the PC become a hands-free channel: EDIT speaks through them, hears you via the headset mic, and the headphone's own button is push-to-listen |
 | 📷 Phone Camera Vision | EDITH-style scan from the phone camera — labels people, cars & plates on a live HUD, JARVIS answers by voice on PC **and** phone |
 | ◈ Holo Lab | Create any hologram/blueprint, assemble a buy/make BOM, run diagnostics and print a build report — smart glasses, robot, vehicle, building, planet or custom geometry |
 | ⚡ Auto-Start on Boot | Registers with the OS startup system (registry / LaunchAgent / .desktop) |
@@ -97,12 +97,25 @@ This is an honest software prototype: it renders a hologram-style visualization 
 
 ## 🎧 Headphones Mode — talk to EDIT through Bluetooth headphones
 
-Turn any Bluetooth headset into a hands-free channel for the assistant:
+The headphones can be paired either to the **phone** (Remote Dashboard) or to the **PC** — EDIT supports both.
 
-- **On the PC** — press **🎧 HEADPHONES MODE** in the settings drawer (⚙️), or simply say *"включи режим наушников"* / *"headphones mode on"*.
-- **On the Remote Dashboard (phone)** — tap the **🎧** chip in the header. The button stays in sync with the PC and shows the connected headset's name.
+### 📱 Headphones connected to the phone (main scenario)
 
-When the mode is **ON** and Bluetooth headphones are connected to the PC:
+1. Open the **Remote Dashboard** on your phone (pair via **Remote Control** QR) and tap the **🎧** chip in the header.
+2. EDIT asks for microphone access once (that is the headset mic). The mode is now ON — the chip lights up.
+3. Press the **button on your Bluetooth headphones** — EDIT instantly stops talking and listens to you through the headset:
+   - the press is caught by the phone (browser media session → `/api/headphones/button`);
+   - the phone streams its microphone (the headset mic) to the PC, so EDIT hears you;
+   - EDIT's reply plays through the phone's audio output — i.e. straight into your headphones.
+
+Notes:
+
+- Works best in **Chrome on Android** (`navigator.mediaSession`). If the phone is also playing music in another app, the button controls that app instead — pause it first.
+- While the mode is ON the tab keeps a silent media session so the button reaches EDIT, and the headset-mic channel is open (tap 🎤 to stop it manually, 🎧 again to turn the mode off).
+
+### 🖥️ Headphones connected to the PC
+
+- Press **🎧 HEADPHONES MODE** in the settings drawer (⚙️), or say *"включи режим наушников"* / *"headphones mode on"*.
 
 | What | What happens |
 |---|---|
@@ -110,13 +123,12 @@ When the mode is **ON** and Bluetooth headphones are connected to the PC:
 | 🎤 Input | EDIT hears you through the headset microphone (Hands-Free endpoint; falls back to the default PC mic if the headset has none) |
 | 🔘 Headphone button | The multifunction button on the headphones (AVRCP play/pause) becomes **push-to-listen** — tap it while EDIT is talking and EDIT instantly stops and listens to you through the headset |
 
-Details:
+PC-side details:
 
 - **Auto-switch** — the mode re-checks Bluetooth every ~10 s: connect your headset later and EDIT switches over automatically; unplug it and the audio falls back to the default devices.
 - **Remembered** — the mode is saved to `config/api_keys.json` (`headphones_mode`) and restored on the next start.
 - **Voice control** — the `headphones_mode` tool answers *"наушники"*, *"режим наушников"*, *"bluetooth headphones"*, *"говори через наушники"*, etc.
 - **Button capture** — Windows-only, requires `pip install keyboard` (already in `requirements.txt`). Without it the mode still reroutes the audio; only the headphone-button trigger is unavailable.
-- **No headphones?** — the mode turns on, keeps listening for the button, and switches the audio the moment a Bluetooth headset pairs.
 
 ---
 

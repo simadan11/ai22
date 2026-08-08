@@ -562,6 +562,7 @@ class DashboardServer:
         self._connect_callback            = None
         self._holo_callback               = None
         self._headphones_callback         = None   # async (enabled|None) -> status dict
+        self._headphones_button_callback  = None   # async () -> None — phone headphone button
         self._pending_keys: dict[str, float] = {}
         self._device_sessions: dict[str, dict] = {}  # device_token → {session_key}
         self._phone_audio_queue: asyncio.Queue    = asyncio.Queue(maxsize=200)
@@ -631,6 +632,11 @@ class DashboardServer:
     def set_headphones_callback(self, fn) -> None:
         """fn is async: (enabled: bool | None) -> dict (headphone-mode status)."""
         self._headphones_callback = fn
+
+    def set_headphones_button_callback(self, fn) -> None:
+        """fn is async: () -> None — fired when the phone-side headphone
+        button is pressed (EDIT should stop talking and listen)."""
+        self._headphones_button_callback = fn
 
     def create_holo_project(
         self,
@@ -1035,6 +1041,24 @@ class DashboardServer:
                 return JSONResponse({"ok": False, "error": str(e)[:200]}, status_code=502)
             # the callback itself broadcasts the fresh status to every client
             return JSONResponse({"ok": True, "status": status})
+
+        @app.post("/api/headphones/button")
+        async def headphones_button_ep(req: Request):
+            """Phone-side headphone button (AVRCP play/pause) → EDIT listens.
+
+            The phone catches the headphone's button press via the browser
+            mediaSession API and forwards it here so EDIT stops talking and
+            the phone-mic channel (headset mic) is heard on the PC.
+            """
+            if not _auth(req):
+                return JSONResponse({"error": "Unauthorized"}, status_code=401)
+            if not self._headphones_button_callback:
+                return JSONResponse({"ok": False, "error": "PC audio unavailable"})
+            try:
+                await self._headphones_button_callback()
+            except Exception as e:
+                return JSONResponse({"ok": False, "error": str(e)[:200]}, status_code=502)
+            return JSONResponse({"ok": True})
 
         # ── Phone camera — EDITH vision ───────────────────────────────────────
 

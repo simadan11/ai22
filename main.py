@@ -1147,6 +1147,23 @@ class JarvisLive:
             except Exception:
                 pass
 
+    async def _on_phone_headphone_button(self) -> None:
+        """Phone-side headphone button pressed (headphones on the phone).
+
+        The Remote Dashboard catches the AVRCP play/pause press via the
+        browser mediaSession API and calls /api/headphones/button → here:
+        EDIT stops talking so the phone-mic stream (= headset mic) is heard.
+        """
+        self.interrupt()
+        self.ui.write_log("🎧 Headphone button (phone) — EDIT listening…")
+        if self._dashboard:
+            try:
+                await self._dashboard.broadcast(
+                    {"type": "headphones", "action": "listen"}
+                )
+            except Exception:
+                pass
+
     def _on_headphone_status_changed(self, status: dict) -> None:
         """Called by HeadphonesManager's monitor when BT devices (dis)connect."""
         try:
@@ -2416,6 +2433,7 @@ class JarvisLive:
             self._dashboard.set_connect_callback(self._on_phone_connected)
             self._dashboard.set_holo_callback(self.ui.show_holo_project)
             self._dashboard.set_headphones_callback(self._dashboard_headphones_cb)
+            self._dashboard.set_headphones_button_callback(self._on_phone_headphone_button)
             asyncio.create_task(self._dashboard.serve())
             # Wire the Remote overlay's device hub (list + kick + revoke)
             def _kick_device(did: str) -> None:

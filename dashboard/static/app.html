@@ -533,7 +533,7 @@
     <div class="spacer"></div>
     <button id="holo-btn" onclick="openHoloLab()" title="Holo Lab — wearable prototype studio">◈ HOLO</button>
     <button id="dev-btn" onclick="toggleDevPanel()" title="Connected devices hub">🛰 <span id="dev-count">0</span></button>
-    <button id="hp-btn" onclick="toggleHeadphones()" title="Headphones mode — EDIT speaks through Bluetooth headphones, the headphone button = 'EDIT, listen now'">🎧</button>
+    <button id="hp-btn" onclick="toggleHeadphones()" title="Headphones mode — Bluetooth headphones connected to THIS phone; the headphone button = 'EDIT, listen now'">🎧</button>
     <button id="spk-btn" onclick="toggleSpk()" title="JARVIS voice on this device">🔊</button>
     <div class="url">__IP__:__PORT__</div>
   </header>
@@ -729,7 +729,6 @@
       if (m.type === 'devices')       _setDevCount(m.count);
       if (m.type === 'headphones') {
         if (m.action === 'listen') sys('🎧 Headphone button pressed — EDIT listening…');
-        if (m.status) _applyHeadphones(m.status);
       }
       if (m.type === 'vision_status') sys(m.state === 'error' ? m.text : 'Phone camera: ' + m.state + '…');
       if (m.type === 'holo_project' && m.project) {
@@ -953,52 +952,94 @@
       toast(_spkOn ? 'JARVIS voice: ON' : 'JARVIS voice: OFF');
     }
 
-    // ── Headphones mode — EDIT on the PC speaks through BT headphones ───────
-    // A tap on the headphone's own multifunction button makes EDIT stop
-    // talking and listen through the headset.
-    let _hpOn = false;
+    // ── Headphones mode (🎧) — Bluetooth headphones connected to THIS phone ──
+    // When ON, the headphone's own multifunction button (AVRCP play/pause)
+    // becomes push-to-listen: EDIT stops talking on the PC and hears you
+    // through this phone's microphone (= the headset mic).  EDIT's voice
+    // already plays on the phone's default output — the headphones.
+    let _hpOn    = false;
+    let _hpAudio = null;   // silent loop keeps this tab the active media session
 
     async function toggleHeadphones() {
       const next = !_hpOn;
-      sys(next ? 'Switching headphones mode ON…' : 'Switching headphones mode OFF…');
-      try {
-        const r = await _authFetch('/api/headphones', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ enabled: next })
-        });
-        const j = await r.json();
-        if (!j.ok) throw new Error(j.error || 'request failed');
-        _applyHeadphones(j.status);
-      } catch (e) {
-        sys('Headphones mode error: ' + e.message);
-        toast('🎧 ' + e.message);
-      }
-    }
-
-    function _applyHeadphones(st) {
-      if (!st) return;
-      _hpOn = !!st.enabled;
-      const b = document.getElementById('hp-btn');
-      if (b) {
-        b.classList.toggle('on', _hpOn);
-        b.title = _hpOn
-          ? 'Headphones mode ON — EDIT speaks through ' + (st.name || 'Bluetooth headphones')
-          : 'Headphones mode — EDIT speaks through Bluetooth headphones, the headphone button = \'EDIT, listen now\'';
-      }
-      if (_hpOn) {
-        sys(st.connected
-          ? '🎧 Headphones mode ON — ' + (st.name || 'connected')
-          : '🎧 Headphones mode ON — no Bluetooth headphones detected (audio stays on default devices)');
+      if (next) {
+        if (!_startHpMode()) {
+          sys('🎧 Headphones mode: this browser cannot catch the headphone button (needs Chrome/Android mediaSession).');
+          return;
+        }
+        _hpOn = true;
+        sys('🎧 Headphones mode ON — press the button on your Bluetooth headphones to talk to EDIT');
+        // Ask for mic permission now (inside the tap gesture) and open the
+        // headset-mic channel — so EDIT already hears you and the headphone
+        // button can restart the stream later without another permission tap.
+        if (!_voiceWs) doMic();
       } else {
-        sys('🎧 Headphones mode OFF — audio back to default devices');
+        _stopHpMode();
+        _hpOn = false;
+        sys('🎧 Headphones mode OFF');
       }
+      const b = document.getElementById('hp-btn');
+      if (b) b.classList.toggle('on', _hpOn);
     }
 
-    // sync the button with the PC state on load
-    _authFetch('/api/headphones').then(r => r.json()).then(j => {
-      if (j && j.ok) _applyHeadphones(j.status);
-    }).catch(() => {});
+    function _startHpMode() {
+      let ok = false;
+      if ('mediaSession' in navigator) {
+        try {
+          navigator.mediaSession.metadata = new MediaMetadata({
+            title: 'EDIT — Headphones Mode',
+            artist: 'MARK Remote',
+          });
+          const press = () => _hpButtonPressed();
+          for (const a of ['playpause', 'play', 'pause', 'previoustrack', 'nexttrack']) {
+            try { navigator.mediaSession.setActionHandler(a, press); ok = true; } catch (_) {}
+          }
+        } catch (_) {}
+      }
+      // Keep this tab the "active media session" so AVRCP presses from the
+      // headphones reach the page — a silent looping audio element.
+      try {
+        if (!_hpAudio) {
+          _hpAudio = new Audio(_silentWavUrl());
+          _hpAudio.loop = true;
+          _hpAudio.volume = 0;
+          _hpAudio.play().catch(() => {});
+        }
+      } catch (_) {}
+      return ok;
+    }
+
+    function _stopHpMode() {
+      try {
+        for (const a of ['playpause', 'play', 'pause', 'previoustrack', 'nexttrack']) {
+          try { navigator.mediaSession.setActionHandler(a, null); } catch (_) {}
+        }
+        navigator.mediaSession.metadata = null;
+      } catch (_) {}
+      try { if (_hpAudio) { _hpAudio.pause(); _hpAudio = null; } } catch (_) {}
+    }
+
+    function _silentWavUrl() {
+      // tiny silent WAV built in JS (8 kHz mono 16-bit, 0.1 s of zeros)
+      const sr = 8000, n = sr / 10;
+      const buf = new ArrayBuffer(44 + n * 2);
+      const dv = new DataView(buf);
+      const ascii = (o, s) => { for (let i = 0; i < s.length; i++) dv.setUint8(o + i, s.charCodeAt(i)); };
+      ascii(0, 'RIFF'); dv.setUint32(4, 36 + n * 2, true); ascii(8, 'WAVE');
+      ascii(12, 'fmt '); dv.setUint32(16, 16, true); dv.setUint16(20, 1, true);
+      dv.setUint16(22, 1, true); dv.setUint32(24, sr, true); dv.setUint32(28, sr * 2, true);
+      dv.setUint16(32, 2, true); dv.setUint16(34, 16, true);
+      ascii(36, 'data'); dv.setUint32(40, n * 2, true);
+      return URL.createObjectURL(new Blob([buf], { type: 'audio/wav' }));
+    }
+
+    function _hpButtonPressed() {
+      sys('🎧 Headphone button — EDIT listening…');
+      // 1) EDIT stops talking on the PC and opens the channel
+      _authFetch('/api/headphones/button', { method: 'POST' }).catch(() => {});
+      // 2) stream this phone's mic (= headset mic) so EDIT hears the user
+      if (!_voiceWs) doMic();
+    }
 
     function _playSpk(buf) {
       if (!_spkOn) return;
