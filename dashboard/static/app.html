@@ -733,7 +733,7 @@
         if ('sink' in m) _applySink(m.sink);
       }
       if (m.type === 'tts') {
-        if (m.cancel) _stopTts();
+        if (m.cancel) { _stopTts(); _stopSpk(); }
         else if (m.text) _speakTts(m.text);
       }
       if (m.type === 'vision_status') sys(m.state === 'error' ? m.text : 'Phone camera: ' + m.state + '…');
@@ -1063,8 +1063,9 @@
 
     function _hpButtonPressed() {
       sys('🎧 Headphone button — EDIT listening…');
-      // 0) stop the phone's TTS voice instantly
+      // 0) stop the phone's TTS / streamed Jarvis voice instantly
       _stopTts();
+      _stopSpk();
       // 1) EDIT stops talking on the PC and opens the channel
       _authFetch('/api/headphones/button', { method: 'POST' }).catch(() => {});
       // 2) stream this phone's mic (= headset mic) so EDIT hears the user
@@ -1118,6 +1119,12 @@
       if (window.speechSynthesis) {
         try { speechSynthesis.cancel(); } catch (_) {}
       }
+    }
+
+    // Stop the streamed voice (Jarvis Voice Module PCM) immediately.
+    function _stopSpk() {
+      _spkNext = 0;
+      if (_spkCtx) { try { _spkCtx.close(); } catch (_) {} _spkCtx = null; }
     }
 
     // restore the mode after a page reload (the PC side keeps its mute flag).

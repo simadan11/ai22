@@ -31,3 +31,4 @@ keyboard; sys_platform == "win32"
 qrcode[pil]
 openai
 edge-tts
+miniaudio

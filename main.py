@@ -974,16 +974,25 @@ class _TTSBridge:
     """
     Dedicated TTS voice module (EdgeTTS / Kokoro / ElevenLabs).
 
-    Takes reply texts and voices them through the engine's own player on a
-    strict FIFO worker thread — the AI (Gemini Live) does NOT speak; this
-    module does.  Replaces the direct Gemini audio stream so there is exactly
-    ONE voice and no possibility of a doubled AI voice.
+    Two modes:
+      • stream_cb=None  — voices text through the engine's own player on a
+        strict FIFO worker thread (PC speakers).
+      • stream_cb=fn    — JARVIS VOICE MODULE: synthesises with a deep
+        British male EdgeTTS voice ("en-GB-RyanNeural") and streams the PCM
+        to the phone's single audio-sink tab (Bluetooth headphones), so the
+        phone gets a proper Jarvis-quality neural voice.
+
+    Either way the AI (Gemini Live) does NOT speak — exactly one voice.
     """
 
-    def __init__(self):
+    def __init__(self, stream_cb=None, voice: str = "en-GB-RyanNeural"):
         self._q = queue.Queue()
         self._player = None
         self._lock = threading.Lock()
+        self._stream_cb = stream_cb          # callable(bytes) → dashboard sink
+        self._voice = voice or "en-GB-RyanNeural"
+        self._streaming = False              # True while streaming to the phone
+        self._cancelled = False
         self._thread = threading.Thread(
             target=self._run, daemon=True, name="TTS-Voice"
         )
@@ -1002,14 +1011,17 @@ class _TTSBridge:
     def playing(self) -> bool:
         """True while the TTS engine is actually speaking (mic echo guard)."""
         with self._lock:
+            if self._stream_cb is not None:
+                return self._streaming
             try:
                 return bool(self._player and self._player.is_playing)
             except Exception:
                 return False
 
     def clear(self) -> None:
-        """Stop current playback and drop queued text (interrupt)."""
+        """Stop current playback/streaming and drop queued text (interrupt)."""
         with self._lock:
+            self._cancelled = True
             if self._player:
                 try:
                     self._player.stop()
@@ -1026,7 +1038,11 @@ class _TTSBridge:
             text = self._q.get()
             if text is None:
                 break
+            self._cancelled = False          # fresh utterance
             try:
+                if self._stream_cb is not None:
+                    self._speak_stream(text)
+                    continue
                 if self._player is None:
                     import json as _json
                     from core.tts import create_tts_player
@@ -1043,6 +1059,63 @@ class _TTSBridge:
                         self._player.speak(text)
             except Exception as e:
                 print(f"[TTS] Voice module error: {e}")
+
+    # ── Jarvis voice streaming (phone headphones mode) ────────────────────
+
+    def _speak_stream(self, text: str) -> None:
+        """Synthesise on the PC with the Jarvis voice and stream PCM (24 kHz
+        int16 mono) to the phone sink via stream_cb — never played on the PC."""
+        with self._lock:
+            self._streaming = True
+        try:
+            import asyncio as _aio
+            import edge_tts
+            import miniaudio
+            import numpy as np
+
+            loop = _aio.new_event_loop()
+            try:
+                audio = loop.run_until_complete(self._synth_async(text, edge_tts))
+            finally:
+                loop.close()
+            if not audio or self._cancelled:
+                return
+
+            decoded = miniaudio.decode(
+                audio,
+                output_format=miniaudio.SampleFormat.FLOAT32,
+                nchannels=1,
+            )
+            samples = np.asarray(decoded.samples, dtype=np.float32)
+            sr = int(decoded.sample_rate) or 24000
+            if sr != 24000 and len(samples):
+                n = int(len(samples) * 24000 / sr)
+                xo = np.linspace(0, 1, len(samples), endpoint=False)
+                xn = np.linspace(0, 1, n, endpoint=False)
+                samples = np.interp(xn, xo, samples).astype(np.float32)
+            pcm = (np.clip(samples, -1, 1) * 32767).astype(np.int16).tobytes()
+            # ~50 ms slices — matches the phone player's PCM framing
+            for i in range(0, len(pcm), 2400):
+                if self._cancelled:
+                    break
+                if self._stream_cb is not None:
+                    try:
+                        self._stream_cb(pcm[i : i + 2400])
+                    except Exception:
+                        break
+        except Exception as e:
+            print(f"[Jarvis] Voice stream error: {e}")
+        finally:
+            with self._lock:
+                self._streaming = False
+
+    async def _synth_async(self, text: str, edge_tts) -> bytes:
+        comm = edge_tts.Communicate(text, self._voice)
+        buf = bytearray()
+        async for chunk in comm.stream():
+            if chunk["type"] == "audio":
+                buf.extend(chunk["data"])
+        return bytes(buf)
 
 
 class JarvisLive:
@@ -1083,10 +1156,12 @@ class JarvisLive:
         self.ui.on_headphones_toggle = self._ui_toggle_headphones
 
         # ── TTS voice module (🎙) ───────────────────────────────────────────
-        # When enabled, the AI's own audio is discarded and every reply is
-        # voiced by the dedicated TTS module (phone speechSynthesis / PC
-        # EdgeTTS) — exactly one voice, never two.
-        self._pc_tts       = None          # _TTSBridge, created lazily
+        # PC: the AI speaks as always (its own audio plays through the PC).
+        # Phone headphones mode: the AI's audio is discarded and the reply is
+        # voiced by the Jarvis Voice Module (EdgeTTS, deep British male)
+        # streamed to the phone's headphones — exactly one voice.
+        self._pc_tts       = None          # local PC TTS bridge (optional mode)
+        self._jarvis_tts   = None          # Jarvis voice streaming bridge (phone)
         self._dashboard     = None
         self._briefing_sent    = False          # morning briefing fires once per process
         self._sys_monitor      = SystemMonitor()  # persistent cooldown state
@@ -1251,12 +1326,23 @@ class JarvisLive:
             return True
 
     def _tts_voice_mode(self) -> bool:
-        """TTS voice module: replies are voiced by the TTS engine, not by the AI."""
+        """TTS voice module on the PC: replies voiced by the PC TTS engine.
+        Default OFF — the PC speaks with the AI's own voice as always."""
         try:
             with open(API_CONFIG_PATH, "r", encoding="utf-8") as f:
-                return bool(json.load(f).get("tts_voice_mode", True))
+                return bool(json.load(f).get("tts_voice_mode", False))
         except Exception:
-            return True
+            return False
+
+    def _jarvis_voice(self) -> str:
+        """EdgeTTS voice used by the Jarvis Voice Module (phone headphones)."""
+        try:
+            with open(API_CONFIG_PATH, "r", encoding="utf-8") as f:
+                return str(
+                    json.load(f).get("tts_jarvis_voice", "en-GB-RyanNeural")
+                ).strip() or "en-GB-RyanNeural"
+        except Exception:
+            return "en-GB-RyanNeural"
 
     def _save_tts_voice_mode(self, enabled: bool) -> None:
         try:
@@ -1396,38 +1482,65 @@ class JarvisLive:
         """True when replies must be voiced by the TTS module (never the AI)."""
         return self._tts_voice_mode() or self._phone_headphones_active
 
+    @staticmethod
+    def _jarvis_available() -> bool:
+        """Dependencies of the Jarvis Voice Module (EdgeTTS + miniaudio)."""
+        try:
+            import edge_tts      # noqa: F401
+            import miniaudio     # noqa: F401
+            return True
+        except Exception:
+            return False
+
     async def _dispatch_tts(self, text: str) -> None:
         """Voice `text` through the dedicated TTS module.
 
-        Phone Headphones Mode → the phone's own TTS (speechSynthesis) via the
-        single audio-sink tab.  Otherwise → the PC TTS engine (EdgeTTS/Kokoro).
+        Phone Headphones Mode → the Jarvis Voice Module (EdgeTTS deep British
+        male on the PC) streamed to the phone's single sink tab; falls back to
+        the phone's own speechSynthesis if the module's deps are missing.
+        Otherwise → the PC TTS engine (EdgeTTS/Kokoro) on the PC speakers.
         """
-        delivered = False
         if self._phone_headphones_active and self._dashboard:
-            try:
-                delivered = await self._dashboard.send_tts(text)
-            except Exception:
-                delivered = False
-        if not delivered:
-            if self._pc_tts is None:
-                self._pc_tts = _TTSBridge()
-            self._pc_tts.speak(text)
+            if self._jarvis_available():
+                if self._jarvis_tts is None:
+                    self._jarvis_tts = _TTSBridge(
+                        stream_cb=self._dashboard.feed_audio,
+                        voice=self._jarvis_voice(),
+                    )
+                self._jarvis_tts.speak(text)
+            else:
+                try:
+                    await self._dashboard.send_tts(text)   # phone speechSynthesis
+                except Exception:
+                    pass
+            self.set_speaking(True)
+            return
+        if self._pc_tts is None:
+            self._pc_tts = _TTSBridge()
+        self._pc_tts.speak(text)
         self.set_speaking(True)
 
     def _cancel_tts(self) -> None:
         """Stop the TTS voice instantly (interrupt / headphone button)."""
         if self._pc_tts is not None:
             self._pc_tts.clear()
-        if self._dashboard and self._loop:
+        if self._jarvis_tts is not None:
+            self._jarvis_tts.clear()
+        if self._dashboard:
             try:
-                asyncio.run_coroutine_threadsafe(
-                    self._dashboard.broadcast(
-                        {"type": "tts", "text": "", "cancel": True}
-                    ),
-                    self._loop,
-                )
+                self._dashboard.clear_audio()   # drop buffered phone PCM
             except Exception:
                 pass
+            if self._loop:
+                try:
+                    asyncio.run_coroutine_threadsafe(
+                        self._dashboard.broadcast(
+                            {"type": "tts", "text": "", "cancel": True}
+                        ),
+                        self._loop,
+                    )
+                except Exception:
+                    pass
 
     def speak(self, text: str):
         if not self._loop or not self.session:

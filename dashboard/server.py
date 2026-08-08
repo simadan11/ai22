@@ -565,6 +565,7 @@ class DashboardServer:
         self._headphones_button_callback  = None   # async () -> None — phone headphone button
         self._phone_headphones_callback   = None   # async (bool) -> dict — phone Headphones Mode on/off
         self._audio_sink: str | None      = None   # dev_id of the phone running Headphones Mode
+        self._loop                        = None   # asyncio loop (set in serve())
         self._pending_keys: dict[str, float] = {}
         self._device_sessions: dict[str, dict] = {}  # device_token → {session_key}
         self._phone_audio_queue: asyncio.Queue    = asyncio.Queue(maxsize=200)
@@ -757,11 +758,36 @@ class DashboardServer:
 
     def feed_audio(self, chunk: bytes) -> None:
         """main.py drops every JARVIS speech PCM slice here (24 kHz int16 mono).
-        Non-blocking: a slow phone must never stall the assistant's voice."""
+        Non-blocking: a slow phone must never stall the assistant's voice.
+        Thread-safe: called from the Jarvis Voice Module's worker thread too."""
         try:
-            self._audio_out_queue.put_nowait(chunk)
+            loop = self._loop
+            if loop is not None and loop.is_running():
+                loop.call_soon_threadsafe(
+                    self._audio_out_queue.put_nowait, chunk
+                )
+            else:
+                self._audio_out_queue.put_nowait(chunk)
         except asyncio.QueueFull:
             pass  # phone lags more than ~8 s behind — drop rather than back up
+
+    def clear_audio(self) -> None:
+        """Drop buffered voice PCM (interrupt / headphone button). Thread-safe."""
+        try:
+            loop = self._loop
+            if loop is not None and loop.is_running():
+                loop.call_soon_threadsafe(self._drain_audio)
+            else:
+                self._drain_audio()
+        except Exception:
+            pass
+
+    def _drain_audio(self) -> None:
+        while True:
+            try:
+                self._audio_out_queue.get_nowait()
+            except asyncio.QueueEmpty:
+                break
 
     async def send_tts(self, text: str) -> bool:
         """Deliver reply text to the phone that runs Headphones Mode
@@ -1499,6 +1525,7 @@ class DashboardServer:
             print("[Dashboard] Run:  pip install fastapi 'uvicorn[standard]' cryptography")
             return
 
+        self._loop = asyncio.get_event_loop()   # for thread-safe feed_audio
         # Firewall setup runs in a thread — uvicorn starts immediately,
         # no waiting for UAC dialogs or subprocess timeouts.
         asyncio.get_event_loop().run_in_executor(None, _ensure_network_access, PORT)
