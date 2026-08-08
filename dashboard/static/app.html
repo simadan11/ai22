@@ -732,6 +732,10 @@
         if (m.action === 'listen') sys('🎧 Headphone button pressed — EDIT listening…');
         if ('sink' in m) _applySink(m.sink);
       }
+      if (m.type === 'tts') {
+        if (m.cancel) _stopTts();
+        else if (m.text) _speakTts(m.text);
+      }
       if (m.type === 'vision_status') sys(m.state === 'error' ? m.text : 'Phone camera: ' + m.state + '…');
       if (m.type === 'holo_project' && m.project) {
         const chip = document.getElementById('holo-project-chip');
@@ -1059,6 +1063,8 @@
 
     function _hpButtonPressed() {
       sys('🎧 Headphone button — EDIT listening…');
+      // 0) stop the phone's TTS voice instantly
+      _stopTts();
       // 1) EDIT stops talking on the PC and opens the channel
       _authFetch('/api/headphones/button', { method: 'POST' }).catch(() => {});
       // 2) stream this phone's mic (= headset mic) so EDIT hears the user
@@ -1076,6 +1082,41 @@
       if (b) {
         b.textContent = _spkOn ? '🔊' : '🔇';
         b.classList.toggle('muted', !_spkOn);
+      }
+    }
+
+    // ── TTS voice module — the phone's own speech synthesis ────────────────
+    // EDIT's replies arrive as TEXT; this phone's system TTS module voices
+    // them into the headphones.  The AI's audio stream is not used at all,
+    // so there is exactly ONE voice.
+    let _ttsVoice = null;
+    if (window.speechSynthesis) {
+      const _pickVoice = () => {
+        try {
+          const vs = speechSynthesis.getVoices();
+          for (const v of vs) {
+            if (/^(uk|ru|be|bg)-/i.test(v.lang)) { _ttsVoice = v; break; }
+          }
+        } catch (_) {}
+      };
+      _pickVoice();
+      try { speechSynthesis.onvoiceschanged = _pickVoice; } catch (_) {}
+    }
+
+    function _speakTts(text) {
+      if (!window.speechSynthesis || !_spkOn) return;   // non-sink tabs stay silent
+      try {
+        const u = new SpeechSynthesisUtterance(text);
+        if (_ttsVoice) u.voice = _ttsVoice;
+        u.rate  = 1.0;
+        u.pitch = 1.0;
+        speechSynthesis.speak(u);
+      } catch (_) {}
+    }
+
+    function _stopTts() {
+      if (window.speechSynthesis) {
+        try { speechSynthesis.cancel(); } catch (_) {}
       }
     }
 
@@ -1292,6 +1333,7 @@
           let _pbuf = [], _plen = 0;
           nd.port.onmessage = e => {
             if (_spkActive()) return;   // don't echo JARVIS's own voice back to him
+            if (window.speechSynthesis && speechSynthesis.speaking) return;  // don't echo the TTS voice
             const chunk = new Int16Array(_f32toPcm16(e.data, rate));
             _pbuf.push(chunk); _plen += chunk.length;
             if (_plen >= 1024) {
@@ -1311,6 +1353,7 @@
           const sp = ctx.createScriptProcessor(4096, 1, 1);
           sp.onaudioprocess = e => {
             if (_spkActive()) return;   // don't echo JARVIS's own voice back to him
+            if (window.speechSynthesis && speechSynthesis.speaking) return;  // don't echo the TTS voice
             if (ws.readyState === 1) ws.send(_f32toPcm16(e.inputBuffer.getChannelData(0), rate));
           };
           src.connect(sp);

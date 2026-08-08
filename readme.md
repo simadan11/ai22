@@ -111,6 +111,15 @@ EDIT hears everything, but outside the frame it stays completely silent (no reac
 
 The protocol is saved in `config/api_keys.json` as `wake_bracket` (default `true`) and can be switched off by voice: *«выключи режим EDIT в начале и в конце»* (then EDIT responds to everything) or back on with *«включи wake protocol»*.
 
+### 🗣️ TTS voice module — the AI does not speak, a dedicated module does (default ON)
+
+EDIT's replies are **not** voiced by the AI's own audio — a separate TTS module voices the text:
+
+- **Phone headphones mode:** the phone's own speech synthesis (`speechSynthesis`) speaks the reply straight into the headphones. Exactly one voice, from one place — a doubled AI voice is impossible by design.
+- **PC mode:** the PC TTS engine (EdgeTTS by default, `ru-RU-DmitryNeural`; Kokoro/ElevenLabs also supported via `tts_engine` / `tts_voice` in `config/api_keys.json`) speaks the reply.
+
+Configuration (`config/api_keys.json`): `tts_voice_mode` (default `true`), `tts_engine`, `tts_voice`, `tts_speed`. Switch by voice: *«включи TTS модуль»* / *«выключи озвучку, пусть ИИ говорит»* — the session reconnects automatically.
+
 ### 📱 Headphones connected to the phone (main scenario)
 
 1. Open the **Remote Dashboard** on your phone (pair via **Remote Control** QR) and tap the **🎧** chip in the header.
@@ -118,11 +127,11 @@ The protocol is saved in `config/api_keys.json` as `wake_bracket` (default `true
 3. Press the **button on your Bluetooth headphones** — EDIT instantly stops talking and listens to you through the headset:
    - the press is caught by the phone (browser media session → `/api/headphones/button`);
    - the phone streams its microphone (the headset mic) to the PC, so EDIT hears you;
-   - EDIT's reply plays through the phone's audio output — i.e. straight into your headphones.
+   - EDIT's reply is voiced by the phone's TTS into your headphones.
 
 Notes:
 
-- **No double voice:** while the phone's 🎧 mode is ON, the PC speaker is muted automatically AND the phone tab that runs the mode becomes the single audio sink — no other tab/device plays EDIT's voice, so you never hear two voices (even with the dashboard open in two tabs). The mode is restored after a page reload.
+- **No double voice, guaranteed:** while the phone's 🎧 mode is ON the AI's audio is not used at all (Gemini returns text only), the PC speaker is muted automatically, and the phone tab that runs the mode is the single audio sink — no other tab/device voices the reply. Even with the dashboard open in two tabs you hear exactly one voice. The mode is restored after a page reload.
 - Works best in **Chrome on Android** (`navigator.mediaSession`). If the phone is also playing music in another app, the button controls that app instead — pause it first.
 - **Works with Gelius and any other Bluetooth earbuds/headset** — they all send the standard AVRCP play/pause command on the multifunction button (on Gelius TWS earbuds it's a **single tap** on the earbud). EDIT listens to all of the play/pause/next/prev actions, so any of them triggers push-to-listen.
 - While the mode is ON the tab keeps a silent media session so the button reaches EDIT, and the headset-mic channel is open (tap 🎤 to stop it manually, 🎧 again to turn the mode off).

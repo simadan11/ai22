@@ -763,6 +763,23 @@ class DashboardServer:
         except asyncio.QueueFull:
             pass  # phone lags more than ~8 s behind — drop rather than back up
 
+    async def send_tts(self, text: str) -> bool:
+        """Deliver reply text to the phone that runs Headphones Mode
+        (the single audio sink), which voices it with its own speech
+        synthesis.  Returns False when there is no active sink — the caller
+        then falls back to the PC TTS engine.
+        """
+        sink = self._audio_sink
+        if sink and sink in self._client_info:
+            try:
+                await self._client_info[sink]["ws"].send_json(
+                    {"type": "tts", "text": text}
+                )
+                return True
+            except Exception:
+                pass
+        return False
+
     async def _audio_broadcast_loop(self) -> None:
         """Fan out JARVIS voice PCM to connected phones (binary WS frames).
 

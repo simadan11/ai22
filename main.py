@@ -48,6 +48,7 @@ if _platform.system() == "Windows":
 # ─────────────────────────────────────────────────────────────────────────────
 
 import asyncio
+import queue
 import re
 import threading
 import time
@@ -703,6 +704,28 @@ TOOL_DECLARATIONS = [
         }
     },
     {
+        "name": "tts_voice",
+        "description": (
+            "Toggles the TTS VOICE MODULE. When ON (default), EDIT's replies "
+            "are voiced by the dedicated TTS module (EdgeTTS/Kokoro on the PC, "
+            "or the phone's own speech synthesis in phone headphones mode) — "
+            "the AI's audio is not used, so there is never a doubled voice. "
+            "When OFF, Gemini speaks directly. Call when the user says: "
+            "включи/выключи озвучку, TTS модуль, голос TTS, чтобы не ИИ "
+            "говорил, модуль озвучки, tts voice, speak via tts, etc."
+        ),
+        "parameters": {
+            "type": "OBJECT",
+            "properties": {
+                "enabled": {
+                    "type": "BOOLEAN",
+                    "description": "True to voice replies through the TTS module, false for the AI's direct voice."
+                }
+            },
+            "required": []
+        }
+    },
+    {
     "name": "file_processor",
     "description": (
         "Processes any file that the user has uploaded or dropped onto the interface. "
@@ -947,6 +970,72 @@ def get_all_tool_declarations() -> list[dict]:
     return TOOL_DECLARATIONS + custom_decls
 
 
+class _TTSBridge:
+    """
+    Dedicated TTS voice module (EdgeTTS / Kokoro / ElevenLabs).
+
+    Takes reply texts and voices them through the engine's own player on a
+    strict FIFO worker thread — the AI (Gemini Live) does NOT speak; this
+    module does.  Replaces the direct Gemini audio stream so there is exactly
+    ONE voice and no possibility of a doubled AI voice.
+    """
+
+    def __init__(self):
+        self._q = queue.Queue()
+        self._player = None
+        self._lock = threading.Lock()
+        self._thread = threading.Thread(
+            target=self._run, daemon=True, name="TTS-Voice"
+        )
+        self._thread.start()
+
+    def speak(self, text: str) -> None:
+        """Enqueue text (non-blocking, strict FIFO)."""
+        text = (text or "").strip()
+        if text:
+            try:
+                self._q.put_nowait(text)
+            except queue.Full:
+                pass
+
+    def clear(self) -> None:
+        """Stop current playback and drop queued text (interrupt)."""
+        with self._lock:
+            if self._player:
+                try:
+                    self._player.stop()
+                except Exception:
+                    pass
+        while True:
+            try:
+                self._q.get_nowait()
+            except queue.Empty:
+                break
+
+    def _run(self) -> None:
+        while True:
+            text = self._q.get()
+            if text is None:
+                break
+            try:
+                if self._player is None:
+                    import json as _json
+                    from core.tts import create_tts_player
+                    cfg = {}
+                    try:
+                        cfg = _json.loads(
+                            open(API_CONFIG_PATH, encoding="utf-8").read()
+                        )
+                    except Exception:
+                        pass
+                    self._player = create_tts_player(cfg)
+                with self._lock:
+                    if self._player:
+                        self._player.speak(text)
+            except Exception as e:
+                print(f"[TTS] Voice module error: {e}")
+
+
 class JarvisLive:
 
     def __init__(self, ui: JarvisUI):
@@ -983,6 +1072,14 @@ class JarvisLive:
         self._audio_devices = (None, None)
         self._audio_gen     = 0
         self.ui.on_headphones_toggle = self._ui_toggle_headphones
+
+        # ── TTS voice module (🎙) ───────────────────────────────────────────
+        # When enabled, Gemini Live returns TEXT only — the dedicated TTS
+        # module (this class) voices every reply.  The AI's own audio stream
+        # is not used at all, so there is exactly one voice, never two.
+        self._pc_tts       = None          # _TTSBridge, created lazily
+        self._tts_buf      = ""            # sentence accumulator for streaming
+        self._restarting   = False         # True → session restart in progress
         self._dashboard     = None
         self._briefing_sent    = False          # morning briefing fires once per process
         self._sys_monitor      = SystemMonitor()  # persistent cooldown state
@@ -1025,6 +1122,7 @@ class JarvisLive:
     def interrupt(self) -> None:
         """Stop JARVIS mid-speech: drain queued audio and open mic immediately."""
         self._interrupted = True
+        self._cancel_tts()          # TTS voice module stops instantly
         q = self.audio_in_queue
         if q:
             drained = 0
@@ -1145,6 +1243,25 @@ class JarvisLive:
         except Exception:
             return True
 
+    def _tts_voice_mode(self) -> bool:
+        """TTS voice module: replies are voiced by the TTS engine, not by the AI."""
+        try:
+            with open(API_CONFIG_PATH, "r", encoding="utf-8") as f:
+                return bool(json.load(f).get("tts_voice_mode", True))
+        except Exception:
+            return True
+
+    def _save_tts_voice_mode(self, enabled: bool) -> None:
+        try:
+            with open(API_CONFIG_PATH, "r+", encoding="utf-8") as f:
+                cfg = json.load(f)
+                cfg["tts_voice_mode"] = bool(enabled)
+                f.seek(0)
+                json.dump(cfg, f, indent=4, ensure_ascii=False)
+                f.truncate()
+        except Exception:
+            pass
+
     def _save_wake_bracket(self, enabled: bool) -> None:
         try:
             with open(API_CONFIG_PATH, "r+", encoding="utf-8") as f:
@@ -1229,12 +1346,19 @@ class JarvisLive:
         """Phone reported its Headphones Mode turned on/off.
 
         While ON, EDIT's voice plays ONLY through the phone (= the Bluetooth
-        headphones connected to it), so the PC speaker is muted — otherwise
-        the user hears two voices (PC + phone).
+        headphones connected to it) via the phone's own TTS module, and the
+        PC speaker is muted — otherwise the user hears two voices.
         """
         self._phone_headphones_active = bool(active)
         self._audio_gen += 1   # _play_audio reopens (or skips) the PC stream
         if active:
+            # Phone mode needs the TTS voice path (text → phone TTS).
+            if not self._tts_voice_mode():
+                self._save_tts_voice_mode(True)
+                self.ui.write_log(
+                    "SYS: Phone headphones mode uses the TTS voice module — enabled it."
+                )
+                self._schedule_session_restart()
             self.ui.write_log(
                 "🎧 Phone headphones mode ON — EDIT speaks only through the "
                 "phone (PC speakers muted)"
@@ -1265,6 +1389,76 @@ class JarvisLive:
                 )
             except Exception:
                 pass
+
+    # ── TTS voice module — the AI does not speak, this module does ─────────
+
+    async def _feed_tts_stream(self, txt: str) -> None:
+        """Accumulate reply text and speak whole sentences (streaming)."""
+        self._tts_buf += (" " + txt if self._tts_buf else txt)
+        if self._tts_buf.rstrip()[-1:] in ".!?…\n" or len(self._tts_buf) >= 400:
+            await self._flush_tts()
+
+    async def _flush_tts(self) -> None:
+        # Normalize whitespace / spacing before punctuation (streamed parts
+        # carry their own leading spaces: "Привет" + ", это" + " тест.")
+        sentence = re.sub(r"\s+", " ", self._tts_buf)
+        sentence = re.sub(r"\s+([,.!?…:;])", r"\1", sentence).strip()
+        self._tts_buf = ""
+        if sentence:
+            await self._dispatch_tts(sentence)
+
+    async def _dispatch_tts(self, text: str) -> None:
+        """Voice `text` through the dedicated TTS module.
+
+        Phone Headphones Mode → the phone's own TTS (speechSynthesis) via the
+        single audio-sink tab.  Otherwise → the PC TTS engine (EdgeTTS/Kokoro).
+        """
+        delivered = False
+        if self._phone_headphones_active and self._dashboard:
+            try:
+                delivered = await self._dashboard.send_tts(text)
+            except Exception:
+                delivered = False
+        if not delivered:
+            if self._pc_tts is None:
+                self._pc_tts = _TTSBridge()
+            self._pc_tts.speak(text)
+        self.set_speaking(True)
+
+    def _cancel_tts(self) -> None:
+        """Stop the TTS voice instantly (interrupt / headphone button)."""
+        self._tts_buf = ""
+        if self._pc_tts is not None:
+            self._pc_tts.clear()
+        if self._dashboard and self._loop:
+            try:
+                asyncio.run_coroutine_threadsafe(
+                    self._dashboard.broadcast(
+                        {"type": "tts", "text": "", "cancel": True}
+                    ),
+                    self._loop,
+                )
+            except Exception:
+                pass
+
+    def _schedule_session_restart(self) -> None:
+        """Close the live session so the run loop reconnects with new settings
+        (e.g. after switching the voice engine between AI audio and TTS)."""
+        if not self._loop or not self.session:
+            return
+        self._restarting = True
+        try:
+            asyncio.run_coroutine_threadsafe(
+                self._close_session(), self._loop
+            )
+        except Exception:
+            pass
+
+    async def _close_session(self) -> None:
+        try:
+            await self.session.close()
+        except Exception:
+            pass
 
     def speak(self, text: str):
         if not self._loop or not self.session:
@@ -1329,6 +1523,19 @@ class JarvisLive:
         # "EDIT … command … EDIT"; EDIT answers only what is between them.
         if self._wake_bracket_enabled():
             parts.append(_WAKE_BRACKET_PROTOCOL)
+
+        # TTS voice module: when enabled (default), the AI does NOT speak —
+        # Gemini returns TEXT and the dedicated TTS module voices the reply.
+        # Phone Headphones Mode always uses the TTS path (the phone speaks).
+        tts_mode = self._tts_voice_mode() or self._phone_headphones_active
+        if tts_mode:
+            return types.LiveConnectConfig(
+                response_modalities=["TEXT"],
+                input_audio_transcription={},
+                system_instruction="\n".join(parts),
+                tools=[{"function_declarations": get_all_tool_declarations()}],
+                session_resumption=types.SessionResumptionConfig(),
+            )
 
         return types.LiveConnectConfig(
             response_modalities=["AUDIO"],
@@ -1685,6 +1892,32 @@ class JarvisLive:
                         "I respond normally to everything you say."
                     )
 
+            elif name == "tts_voice":
+                enabled = bool(args.get("enabled", True))
+                if not enabled and self._phone_headphones_active:
+                    result = (
+                        "Phone Headphones Mode requires the TTS voice module — "
+                        "it stays ON so your headphones keep working."
+                    )
+                else:
+                    self._save_tts_voice_mode(enabled)
+                    self.ui.write_log(
+                        "SYS: TTS voice module — "
+                        + ("ON (AI does not speak)" if enabled else "OFF (AI speaks)")
+                    )
+                    self._cancel_tts()
+                    self._schedule_session_restart()
+                    if enabled:
+                        result = (
+                            "TTS voice module is ON — my replies are voiced by "
+                            "the TTS module, reconnecting now."
+                        )
+                    else:
+                        result = (
+                            "TTS voice module is OFF — the AI speaks directly, "
+                            "reconnecting now."
+                        )
+
             else:
                 from actions.self_improve import is_custom_skill, run_custom_skill
                 if is_custom_skill(name):
@@ -1790,6 +2023,21 @@ class JarvisLive:
                     if response.server_content:
                         sc = response.server_content
 
+                        # TTS voice module (TEXT modality): the AI's reply
+                        # arrives as text parts — buffer them to sentence
+                        # boundaries and voice them through the TTS module.
+                        if getattr(sc, "model_turn", None) and sc.model_turn.parts:
+                            for _part in sc.model_turn.parts:
+                                _txt = _clean_transcript(
+                                    getattr(_part, "text", "") or ""
+                                )
+                                if not _txt:
+                                    continue
+                                if _txt != (out_buf[-1] if out_buf else ""):
+                                    out_buf.append(_txt)
+                                if not self._interrupted:
+                                    await self._feed_tts_stream(_txt)
+
                         if sc.output_transcription and sc.output_transcription.text:
                             txt = _clean_transcript(sc.output_transcription.text)
                             if txt and txt != (out_buf[-1] if out_buf else ""):
@@ -1800,6 +2048,17 @@ class JarvisLive:
                             if txt:
                                 in_buf.append(txt)
                                 self._last_user_speech = time.monotonic()
+
+                        if getattr(sc, "interrupted", False):
+                            # Gemini was interrupted — stop the TTS voice now
+                            self._cancel_tts()
+
+                        if sc.turn_complete:
+                            # Flush any remaining buffered TTS sentence
+                            if self._tts_buf.strip() and not self._interrupted:
+                                await self._flush_tts()
+                            if self._turn_done_event:
+                                self._turn_done_event.set()
 
                         if sc.turn_complete:
                             if self._turn_done_event:
@@ -2641,6 +2900,16 @@ class JarvisLive:
             except SystemExit:
                 raise
             except BaseException as e:
+                # Clean session restart (voice engine switch) — reconnect
+                # immediately without the error noise.
+                if self._restarting:
+                    self._restarting = False
+                    print("[EDIT] Voice engine changed — reconnecting...")
+                    self.set_speaking(False)
+                    self._conn_backoff = 2
+                    await asyncio.sleep(1)
+                    continue
+
                 err_str = str(e)
                 print(f"[EDIT] Error ({type(e).__name__}): {e}")
                 traceback.print_exc()
@@ -2695,6 +2964,7 @@ class JarvisLive:
 
         self.set_speaking(False)
         self.ui.set_state("SLEEPING")
+        self._restarting = False
 
         if self._dashboard:
             await self._dashboard.broadcast({"type": "status", "state": "sleeping"})
