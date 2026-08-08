@@ -132,6 +132,7 @@ Configuration (`config/api_keys.json`): `tts_jarvis_voice` (default `ru-RU-Dmitr
 Notes:
 
 - **No double voice, guaranteed:** while the phone's 🎧 mode is ON the AI's audio is not used at all (Gemini returns text only), the PC speaker is muted automatically, and the phone tab that runs the mode is the single audio sink — no other tab/device voices the reply. Even with the dashboard open in two tabs you hear exactly one voice. The mode is restored after a page reload.
+- **Screen stays on:** while the mode is ON (or the phone mic is streaming) the phone requests a **screen wake lock**, so the display never goes black and the browser never suspends the sound/mic. When the app returns to the foreground, the lock and audio contexts are resumed automatically. (Requires HTTPS — the dashboard already runs over HTTPS.)
 - Works best in **Chrome on Android** (`navigator.mediaSession`). If the phone is also playing music in another app, the button controls that app instead — pause it first.
 - **Works with Gelius and any other Bluetooth earbuds/headset** — they all send the standard AVRCP play/pause command on the multifunction button (on Gelius TWS earbuds it's a **single tap** on the earbud). EDIT listens to all of the play/pause/next/prev actions, so any of them triggers push-to-listen.
 - While the mode is ON the tab keeps a silent media session so the button reaches EDIT, and the headset-mic channel is open (tap 🎤 to stop it manually, 🎧 again to turn the mode off).
