@@ -3,8 +3,8 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
-  <title>EDIT — мобильный ассистент</title>
-  <meta name="description" content="EDIT — персональный AI-ассистент для телефона и наушников">
+  <title>EDIT — персональный AI-ассистент</title>
+  <meta name="description" content="EDIT — полная копия приложения: голос, наушники, память, инструменты">
   <meta name="theme-color" content="#00d4ff">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-capable" content="yes">
@@ -15,16 +15,13 @@
 </head>
 <body>
 
-  <!-- ── Экран входа ─────────────────────────────────────────────── -->
+  <!-- ══ ВХОД ═══════════════════════════════════════════════════════ -->
   <div id="login" class="login">
     <div class="particles" id="particles"></div>
     <div class="login-card glass">
-      <div class="logo-ring">
-        <div class="logo-core">E</div>
-      </div>
+      <div class="logo-ring"><div class="logo-core">E</div></div>
       <div class="login-title">EDIT</div>
       <div class="login-sub">персональный AI-ассистент</div>
-
       <div class="field">
         <label for="pass">Пароль</label>
         <div class="field-row">
@@ -32,42 +29,96 @@
           <button id="eye" class="eye" type="button" aria-label="Показать пароль">👁</button>
         </div>
       </div>
-
       <div class="field">
-        <label for="apikey">API-ключ Gemini <span class="opt">(необязательно)</span></label>
+        <label for="apikey">API-ключ <span class="opt">(необязательно)</span></label>
         <input id="apikey" class="input mono" type="password" placeholder="свой ключ или оставь пустым" autocomplete="off" spellcheck="false">
-        <div class="field-hint">Встроенный ключ уже подключён — свой можно ввести при желании</div>
+        <div class="field-hint">Встроенный/серверный ключ уже подключён</div>
       </div>
-
       <button id="login-btn" class="btn primary wide">ВОЙТИ</button>
       <div id="login-err" class="login-err"></div>
-      <div class="login-foot">
-        <span id="lock-state" class="lock-state">🔒 защищённый вход</span>
-      </div>
     </div>
   </div>
 
-  <!-- ── Основной чат ─────────────────────────────────────────────── -->
+  <!-- ══ ПРИЛОЖЕНИЕ ═════════════════════════════════════════════════ -->
   <div id="app" class="app">
     <header>
-      <div class="logo"><span class="dot-cyan"></span>EDIT</div>
+      <div class="logo"><span class="dot-cyan"></span><span id="asst-name">EDIT</span></div>
       <div class="pill" id="pill"><span class="dot"></span><span id="st">...</span></div>
       <div class="spacer"></div>
+      <button id="hp-btn" class="icon-btn" title="Наушники: тап по наушнику = говорить">🎧</button>
       <button id="tts-btn" class="icon-btn" title="Озвучка ответов">🔊</button>
-      <button id="hp-btn" class="icon-btn" title="Наушники: кнопка наушника = «говорить»">🎧</button>
+      <button id="set-btn" class="icon-btn" title="Настройки">⚙️</button>
+      <button id="out-btn" class="icon-btn" title="Выйти">⏻</button>
     </header>
 
+    <!-- HUD: орб + статус -->
+    <div id="hud" class="hud">
+      <div class="orb" id="orb">
+        <div class="orb-ring r1"></div>
+        <div class="orb-ring r2"></div>
+        <div class="orb-ring r3"></div>
+        <div class="orb-core"><span id="orb-letter">E</span></div>
+      </div>
+      <div class="hud-state" id="hud-state">НАЖМИ НА ОРБ И ГОВОРИ</div>
+      <div class="hud-sub" id="hud-sub">или скажи «EDIT, …»</div>
+    </div>
+
+    <!-- Лог сессии -->
     <main id="feed" class="feed"></main>
 
+    <!-- Ввод -->
     <footer class="inputbar">
-      <input id="inp" class="chat-input" placeholder="Скажи или напиши EDIT…" autocomplete="off">
-      <button id="mic-btn" class="mic-btn" title="Голосовой ввод">
-        <span class="mic-ico">🎤</span>
-      </button>
+      <input id="inp" class="chat-input" placeholder="Скажи или напиши…" autocomplete="off">
+      <button id="mic-btn" class="mic-btn" title="Говорить"><span class="mic-ico">🎤</span></button>
       <button id="send-btn" class="send-btn" title="Отправить">➤</button>
     </footer>
   </div>
 
+  <!-- ══ НАСТРОЙКИ ══════════════════════════════════════════════════ -->
+  <div id="settings" class="modal">
+    <div class="modal-card glass">
+      <div class="modal-head">
+        <span>⚙️ НАСТРОЙКИ</span>
+        <button id="set-close" class="x">✕</button>
+      </div>
+      <div class="modal-body">
+        <div class="field"><label>Имя ассистента</label>
+          <input id="s-name" class="input" placeholder="EDIT">
+        </div>
+        <div class="field"><label>Твоё имя</label>
+          <input id="s-user" class="input" placeholder="Владелец">
+        </div>
+        <div class="field"><label>Город (для погоды)</label>
+          <input id="s-city" class="input" placeholder="Киев">
+        </div>
+        <div class="field"><label>Язык распознавания речи</label>
+          <select id="s-lang" class="input">
+            <option value="ru-RU">Русский</option>
+            <option value="uk-UA">Українська</option>
+            <option value="en-US">English</option>
+          </select>
+        </div>
+        <div class="field"><label>Скорость голоса</label>
+          <input id="s-rate" class="input" type="range" min="0.7" max="1.4" step="0.05" value="1">
+          <div class="field-hint" id="s-rate-val">1.0</div>
+        </div>
+        <div class="field"><label>Режим «всегда слушать» (wake-word «EDIT»)</label>
+          <label class="switch"><input type="checkbox" id="s-always"><span></span></label>
+        </div>
+        <div class="field"><label>Напоминание «через N минут»</label>
+          <div class="row2">
+            <input id="s-rem-min" class="input" type="number" min="1" max="600" placeholder="мин">
+            <input id="s-rem-text" class="input" placeholder="о чём напомнить">
+            <button id="s-rem-btn" class="btn small">⏰</button>
+          </div>
+        </div>
+        <button id="s-save" class="btn wide">СОХРАНИТЬ</button>
+        <button id="s-test" class="btn ghost wide">ПРОВЕРИТЬ ГОЛОС</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="toast"></div>
   <script src="/app.js"></script>
 </body>
 </html>
