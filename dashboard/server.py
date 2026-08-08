@@ -908,6 +908,31 @@ class DashboardServer:
             from fastapi.responses import RedirectResponse
             return RedirectResponse(_CRYPTOJS_CDN)
 
+        # ── PWA — installable phone app ────────────────────────────────────
+        @app.get("/manifest.webmanifest")
+        async def pwa_manifest():
+            try:
+                data = (STATIC_DIR / "manifest.webmanifest").read_text(encoding="utf-8")
+            except Exception:
+                return JSONResponse({}, media_type="application/manifest+json")
+            return JSONResponse(
+                json.loads(data), media_type="application/manifest+json"
+            )
+
+        @app.get("/sw.js")
+        async def service_worker():
+            return FileResponse(
+                str(STATIC_DIR / "sw.js"), media_type="application/javascript"
+            )
+
+        @app.get("/static/icons/{name}")
+        async def pwa_icon(name: str):
+            safe = re.sub(r"[^a-zA-Z0-9._-]", "", name)
+            path = STATIC_DIR / "icons" / safe
+            if path.exists() and path.is_file():
+                return FileResponse(str(path))
+            return JSONResponse({"error": "Not found"}, status_code=404)
+
         @app.get("/login", response_class=HTMLResponse)
         async def login_page():
             return HTMLResponse(self._login_html)

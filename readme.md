@@ -54,6 +54,23 @@ It's not just an assistant — it's an extension of your digital life.
 
 ---
 
+## 📲 Install EDIT on your phone as an app (PWA)
+
+The Remote Dashboard is an installable web app (PWA) — you get an icon on the home screen, a full-screen window and a faster start, so the assistant feels like a real app on the phone.
+
+**Android (Chrome):**
+1. Open the Remote Dashboard on the phone (pair via **Remote Control** QR first — the pairing is remembered automatically after the first scan).
+2. Tap the **⤓** button in the header (it appears when the app is installable), or open the browser menu **⋮ → «Добавить на главный экран» / «Установить приложение»**.
+3. Confirm — an **EDIT** icon appears on the home screen. Tap it to launch the dashboard in its own full-screen window. First launch may ask to re-pair if the app data was cleared; normally it reconnects automatically via the remembered device token.
+
+**iPhone / iPad (Safari):**
+1. Open the dashboard, then tap **Share (⤴) → «На экран „Домой"»**.
+2. Add — an EDIT icon appears on the home screen. (iOS runs the dashboard in a standalone Safari window.)
+
+Notes: the installed app keeps working as the remote: headphones mode (🎧), voice channel, EDITH camera, Holo Lab. It also holds the screen wake lock during headphones mode, so the display stays on. The app needs the PC to be running — it is a remote control, not a standalone server.
+
+---
+
 ## 📷 Phone Camera Vision — EDITH Mode
 
 The Remote Dashboard now turns your phone into JARVIS's eyes, Spider-Man style:
