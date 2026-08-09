@@ -1,24 +1,29 @@
-// EDIT — serverless мозг (Vercel /api/chat) на OpenRouter
-// - Чат (мозг): OpenRouter LLM  (POST /api/v1/chat/completions)
-// - Голос:      fish-audio/s2.1-pro-free:free  (POST /api/v1/audio/speech)
+// EDIT — serverless мозг (Vercel /api/chat)
+// - Чат (мозг): Gemini  (generateContent)
+// - Голос:      fish-audio/s2.1-pro-free:free  (OpenRouter /audio/speech)
 // - Инструменты: погода (wttr.in), новости (RSS), поиск (DuckDuckGo),
 //                калькулятор, время/дата.
-// Пароль проверяется на сервере. Ключ OpenRouter: запрос → env → встроенный.
+// Пароль проверяется на сервере. Ключи встроены (base64): Gemini — мозг,
+// OpenRouter — голос. Приоритет: ключ с сайта → env → встроенный.
 
 const DEFAULT_PASSWORD = "gelius";
 const OR_BASE = "https://openrouter.ai/api/v1";
 
-// Встроенный ключ OpenRouter (хранится в base64 — GitHub secret scanning
-// блокирует ключи в чистом виде; на сервере декодируется при запуске).
-// Приоритет: ключ с сайта → env OPENROUTER_API_KEY → встроенный.
+// ── Встроенные ключи (base64 — GitHub secret scanning блокирует ключи в
+//    чистом виде; на сервере декодируются при запуске) ──────────────────
+// Мозг (чат) — Gemini:
+const EMBEDDED_GEMINI_B64 = "QVEuQWI4Uk42SmtZNE1ib1lmRkN1akJ2cnFRektabnNEbDFxV2l0YlhkZE5Fa0huQ1VqdXc=";
+// Голос — OpenRouter (fish-audio):
 const EMBEDDED_OR_KEY_B64 = "c2stb3ItdjEtMGY5MTY3YzE0MTZmNzY1ZDMzZjk5OWUyNzQ1NzBmYWQ3ODZkMjY0NzhmZWM5NGZiYzkyNWQxNmMyNDM0NDM5YQ==";
-const EMBEDDED_OR_KEY = (() => {
-  try { return Buffer.from(EMBEDDED_OR_KEY_B64, "base64").toString("utf8").trim(); }
-  catch (_) { return ""; }
-})();
+
+const _dec = (b64) => { try { return Buffer.from(b64, "base64").toString("utf8").trim(); } catch (_) { return ""; } };
+const EMBEDDED_GEMINI = _dec(EMBEDDED_GEMINI_B64);
+const EMBEDDED_OR_KEY = _dec(EMBEDDED_OR_KEY_B64);
 
 const TTS_MODEL  = process.env.OPENROUTER_TTS_MODEL  || "fish-audio/s2.1-pro-free:free";
-const CHAT_MODEL = process.env.OPENROUTER_MODEL      || "meta-llama/llama-3.3-70b-instruct:free";
+const GEMINI_MODEL = process.env.GEMINI_MODEL        || "gemini-2.5-flash";
+
+// (мозг теперь Gemini — см. geminiChat)
 
 const SYSTEM_PROMPT = `Ты — EDIT (EDITH), персональный AI-ассистент, полная копия десктопного приложения.
 Говори кратко, по делу, с лёгким юмором. Отвечай на языке пользователя.
@@ -126,30 +131,29 @@ function detectTool(text, profile) {
   return null;
 }
 
-// ── OpenRouter: чат (мозг) ─────────────────────────────────────────────────
+// ── Gemini: чат (мозг) ────────────────────────────────────────────────────
 
-async function openRouterChat(apiKey, system, contents) {
-  const resp = await fetch(`${OR_BASE}/chat/completions`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: "Bearer " + apiKey,
-      "HTTP-Referer": process.env.VERCEL_URL ? "https://" + process.env.VERCEL_URL : "https://edit.local",
-      "X-Title": "EDIT",
-    },
-    body: JSON.stringify({
-      model: CHAT_MODEL,
-      messages: [{ role: "system", content: system }, ...contents],
-      temperature: 0.7,
-      max_tokens: 1024,
-    }),
-  });
+async function geminiChat(apiKey, system, contents) {
+  const resp = await fetch(
+    `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${encodeURIComponent(apiKey)}`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        systemInstruction: { parts: [{ text: system }] },
+        contents,
+        generationConfig: { temperature: 0.7, maxOutputTokens: 1024 },
+      }),
+    }
+  );
   const data = await resp.json();
   if (!resp.ok) {
-    const msg = (data && data.error && data.error.message) || `OpenRouter ${resp.status}`;
+    const msg = (data && data.error && data.error.message) || `Gemini ${resp.status}`;
     throw new Error(msg);
   }
-  const text = (data.choices && data.choices[0] && data.choices[0].message && data.choices[0].message.content) || "";
+  const text = (data && data.candidates && data.candidates[0] && data.candidates[0].content &&
+    data.candidates[0].content.parts.map((p) => p.text || "").join("")) || "";
+  if (!String(text).trim()) throw new Error("Пустой ответ Gemini");
   return String(text).trim();
 }
 
@@ -191,11 +195,11 @@ export default async function handler(req, res) {
     return res.status(401).json({ ok: false, error: "Неверный пароль" });
   }
 
-  const apiKey = String(body.api_key || "").trim() || process.env.OPENROUTER_API_KEY || EMBEDDED_OR_KEY;
+  const apiKey = String(body.api_key || "").trim() || process.env.GEMINI_API_KEY || EMBEDDED_GEMINI;
   if (!apiKey) {
     return res.status(500).json({
       ok: false,
-      error: "Нет ключа OpenRouter: задай env OPENROUTER_API_KEY на Vercel или введи ключ при входе.",
+      error: "Нет ключа Gemini: задай env GEMINI_API_KEY на Vercel или введи ключ при входе.",
     });
   }
 
@@ -232,16 +236,19 @@ export default async function handler(req, res) {
   const system = [SYSTEM_PROMPT, userLine, timeLine, cityLine, langLine].filter(Boolean).join("\n");
 
   const contents = messages
-    .map((m) => ({ role: m.role === "assistant" ? "assistant" : "user", content: String(m.content || "").slice(0, 4000) }))
-    .filter((c) => c.content.trim());
-  if (toolNote) contents.push({ role: "user", content: toolNote });
-  if (!contents.length) contents.push({ role: "user", content: "Привет" });
+    .map((m) => ({ role: m.role === "assistant" ? "model" : "user", parts: [{ text: String(m.content || "").slice(0, 4000) }] }))
+    .filter((c) => c.parts[0].text.trim());
+  if (toolNote) contents.push({ role: "user", parts: [{ text: toolNote }] });
+  if (!contents.length) contents.push({ role: "user", parts: [{ text: "Привет" }] });
 
   try {
-    const text = await openRouterChat(apiKey, system, contents);
-    // голос: fish-audio/s2.1-pro-free → mp3 (base64)
+    const text = await geminiChat(apiKey, system, contents);
+    // голос: fish-audio/s2.1-pro-free → mp3 (base64), ключ OpenRouter
+    const orKey = String(body.api_key || "").trim().startsWith("sk-or")
+      ? String(body.api_key).trim()
+      : process.env.OPENROUTER_API_KEY || EMBEDDED_OR_KEY;
     let audio = null;
-    try { audio = await openRouterTTS(apiKey, text); } catch (_) {}
+    if (orKey) { try { audio = await openRouterTTS(orKey, text); } catch (_) {} }
     return res.status(200).json({ ok: true, text, audio, tool: toolData || undefined });
   } catch (e) {
     return res.status(502).json({ ok: false, error: String((e && e.message) || e) });

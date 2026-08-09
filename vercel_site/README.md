@@ -9,7 +9,7 @@
 
 ## Вход
 - **Пароль** — проверяется на сервере (по умолчанию `gelius`, env `EDIT_PASSWORD`).
-- **Ключ OpenRouter уже встроен** (base64 в `api/chat.js`) — вводить его при входе не нужно, достаточно пароля. Приоритет: ключ с сайта → env `OPENROUTER_API_KEY` → встроенный.
+- **Ключи уже встроены** (base64 в `api/chat.js`): **Gemini** — мозг (чат), **OpenRouter** — голос (fish-audio). Вводить их при входе не нужно, достаточно пароля. Приоритет: ключ с сайта → env (`GEMINI_API_KEY` / `OPENROUTER_API_KEY`) → встроенный.
 
 ## 🚀 Деплой на Vercel
 1. Ключ OpenRouter: https://openrouter.ai/settings/keys
