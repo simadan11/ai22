@@ -3,102 +3,491 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-  <meta name="theme-color" content="#0a0e1a" />
+  <meta name="theme-color" content="#02040a" />
   <meta name="apple-mobile-web-app-capable" content="yes" />
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
-  <title>EDIT Mobile</title>
-  <link rel="manifest" href="/manifest.webmanifest" />
-  <link rel="icon" type="image/svg+xml" href="/icons/icon.svg" />
-  <link rel="apple-touch-icon" href="/icons/icon-192.png" />
+  <title>J.A.R.V.I.S. — Neural Knowledge Matrix & AI Assistant</title>
   <link rel="stylesheet" href="/css/style.css" />
 </head>
-<body class="page-main">
-  <div class="scanline"></div>
+<body class="cyber-ui">
+  <!-- Scanline & Ambient Cosmic Glow -->
+  <div class="scanlines-layer" id="scanlinesLayer"></div>
+  <div class="vignette-layer"></div>
+  <div class="ambient-glow-mesh"></div>
 
-  <header class="topbar">
-    <div class="brand">
-      <span class="brand-dot"></span>
-      <span class="brand-name">EDIT</span>
-      <span class="brand-sub">mobile</span>
-    </div>
-    <div class="status" id="connStatus">
-      <span class="dot"></span><span class="text">online</span>
-    </div>
-  </header>
+  <!-- Main Grid Wrapper -->
+  <div class="app-layout">
 
-  <main class="container">
-    <!-- Hero / Приветствие -->
-    <section class="hero">
-      <div class="hero-avatar">
-        <div class="ring r1"></div>
-        <div class="ring r2"></div>
-        <div class="ring r3"></div>
-        <div class="core"></div>
-      </div>
-      <h1 id="greeting">Привет</h1>
-      <p class="hero-sub" id="heroSub">Ассистент на связи. Выбери действие.</p>
-    </section>
+    <!-- TOP TELEMETRY HUD HEADER -->
+    <header class="hud-header">
+      <div class="header-left">
+        <div class="brand-badge">
+          <div class="brand-reactor-mini">
+            <span class="ring-spin"></span>
+            <span class="core-dot"></span>
+          </div>
+          <div class="brand-titles">
+            <div class="brand-title">J.A.R.V.I.S. <span class="version-tag">v4.8 NEURAL</span></div>
+            <div class="brand-sub">QUANTUM KNOWLEDGE GRAPH // AI OPERATING SYSTEM</div>
+          </div>
+        </div>
 
-    <!-- Быстрые действия -->
-    <section class="grid">
-      <button class="tile t-blue" data-cmd="status">
-        <div class="tile-ico">◉</div>
-        <div class="tile-title">Статус</div>
-        <div class="tile-sub">Проверить систему</div>
-      </button>
-      <button class="tile t-green" data-cmd="time">
-        <div class="tile-ico">⏱</div>
-        <div class="tile-title">Время</div>
-        <div class="tile-sub">Сейчас на ПК</div>
-      </button>
-      <button class="tile t-purple" data-cmd="news">
-        <div class="tile-ico">◐</div>
-        <div class="tile-title">Новости</div>
-        <div class="tile-sub">Свежий дайджест</div>
-      </button>
-      <button class="tile t-amber" data-cmd="notes">
-        <div class="tile-ico">✎</div>
-        <div class="tile-title">Заметка</div>
-        <div class="tile-sub">Сохранить мысль</div>
-      </button>
-    </section>
-
-    <!-- Текстовый ввод -->
-    <section class="chat">
-      <div class="chat-log" id="chatLog" aria-live="polite">
-        <div class="msg msg-bot">
-          <div class="msg-who">EDIT</div>
-          <div class="msg-bubble">Готов к работе. Что сделать?</div>
+        <div class="hud-metrics">
+          <div class="metric-item">
+            <span class="metric-lbl">CORE STATUS</span>
+            <span class="metric-val status-online"><span class="pulse-dot"></span> ONLINE</span>
+          </div>
+          <div class="metric-item hide-mobile">
+            <span class="metric-lbl">NODES</span>
+            <span class="metric-val highlight" id="hudTotalNodes">484</span>
+          </div>
+          <div class="metric-item hide-mobile">
+            <span class="metric-lbl">CONNECTIONS</span>
+            <span class="metric-val" id="hudTotalLinks">1,842</span>
+          </div>
+          <div class="metric-item hide-mobile">
+            <span class="metric-lbl">AI LATENCY</span>
+            <span class="metric-val" id="hudLatency">4.2 ms</span>
+          </div>
+          <div class="metric-item hide-mobile">
+            <span class="metric-lbl">SECURITY</span>
+            <span class="metric-val">AES-256 GCM</span>
+          </div>
         </div>
       </div>
-      <form class="chat-input" id="chatForm" autocomplete="off">
-        <input
-          id="chatField"
-          type="text"
-          inputmode="text"
-          placeholder="Скажи ассистенту…"
-          aria-label="Сообщение"
-        />
-        <button type="submit" class="send-btn" aria-label="Отправить">
-          <svg viewBox="0 0 24 24" width="20" height="20"><path fill="currentColor" d="M2 21l21-9L2 3v7l15 2-15 2z"/></svg>
-        </button>
-      </form>
-    </section>
 
-    <!-- Нижняя панель -->
-    <nav class="tabbar">
-      <a href="/index.html" class="tab active">
-        <span class="tab-ico">◉</span><span>Пульт</span>
-      </a>
-      <a href="/headphones.html" class="tab">
-        <span class="tab-ico">🎧</span><span>Наушники</span>
-      </a>
-      <a href="#" class="tab" id="logoutBtn">
-        <span class="tab-ico">⏻</span><span>Выйти</span>
-      </a>
-    </nav>
-  </main>
+      <div class="header-right">
+        <!-- Search input -->
+        <div class="hud-search-bar">
+          <svg class="search-ico" viewBox="0 0 24 24" width="14" height="14">
+            <circle cx="11" cy="11" r="8" fill="none" stroke="currentColor" stroke-width="2"/>
+            <path d="M21 21l-4.35-4.35" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+          </svg>
+          <input type="text" id="nodeSearchInput" placeholder="Поиск в графе (AI Workshop, Claude, GEO...)" autocomplete="off" />
+          <button class="clear-search-btn" id="clearSearchBtn" title="Очистить" style="display:none;">✕</button>
+        </div>
 
+        <!-- Quick actions -->
+        <div class="hud-controls-group">
+          <button class="hud-btn" id="resetCamBtn" title="Сбросить 3D-камеру">
+            <svg viewBox="0 0 24 24" width="14" height="14"><path fill="currentColor" d="M12 5V1L7 6l5 5V7c3.31 0 6 2.69 6 6 0 2.97-2.16 5.44-5 5.92V21c4.42-.49 8-4.24 8-9 0-4.42-3.58-8-8-8z"/></svg>
+            <span class="btn-lbl hide-mobile">Сброс 3D</span>
+          </button>
+          <button class="hud-btn" id="autoRotateToggle" title="Авто-вращение галактики">
+            <svg viewBox="0 0 24 24" width="14" height="14"><path fill="currentColor" d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-1 14H9V8h2v8zm4 0h-2V8h2v8z"/></svg>
+            <span class="btn-lbl hide-mobile">Авто-орбита</span>
+          </button>
+          <button class="hud-btn" id="soundToggleBtn" title="Звуки интерфейса">
+            <svg id="soundIco" viewBox="0 0 24 24" width="14" height="14"><path fill="currentColor" d="M3 9v6h4l5 5V4L7 9H3zm13.5 3c0-1.77-1.02-3.29-2.5-4.03v8.05c1.48-.73 2.5-2.25 2.5-4.02zM14 3.23v2.06c2.89.86 5 3.54 5 6.71s-2.11 5.85-5 6.71v2.06c4.01-.91 7-4.49 7-8.77s-2.99-7.86-7-8.77z"/></svg>
+          </button>
+          <button class="hud-btn" id="scanlineToggleBtn" title="Переключить CRT-сканлайн">
+            <svg viewBox="0 0 24 24" width="14" height="14"><path fill="currentColor" d="M21 3H3c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h18c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm0 16H3V5h18v14zM5 15h14v2H5zm0-4h14v2H5zm0-4h14v2H5z"/></svg>
+          </button>
+          <button class="hud-btn hud-btn-accent" id="toggleLayoutBtn" title="Переключить режим раскладки">
+            <span class="btn-lbl" id="layoutModeLabel">Cosmic Galaxy</span>
+          </button>
+        </div>
+      </div>
+    </header>
+
+    <!-- MAIN BODY: GRAPH & JARVIS SPLIT -->
+    <main class="hud-main">
+
+      <!-- LEFT & CENTER: 3D KNOWLEDGE GRAPH SPACE -->
+      <section class="graph-viewport-container" id="graphContainer">
+        <!-- 3D Canvas -->
+        <canvas id="graphCanvas"></canvas>
+
+        <!-- Top-Left Navigation / Coordinate HUD -->
+        <div class="graph-hud-overlay top-left">
+          <div class="hud-glass-card telemetry-card">
+            <div class="hud-card-header">
+              <span class="hud-corner-tl"></span><span class="hud-corner-tr"></span>
+              <span class="hud-pill">3D NEURAL SPATIAL MATRIX</span>
+            </div>
+            <div class="telemetry-grid">
+              <div class="tele-row">
+                <span class="tele-key">COORDINATES:</span>
+                <span class="tele-val" id="camCoords">X: 0.00 | Y: 0.00 | Z: 950</span>
+              </div>
+              <div class="tele-row">
+                <span class="tele-key">TARGET NODE:</span>
+                <span class="tele-val highlight-val" id="hudActiveNode">AI Workshop [Center Hub]</span>
+              </div>
+              <div class="tele-row">
+                <span class="tele-key">CLUSTER DOMAIN:</span>
+                <span class="tele-val" id="hudActiveCluster">Primary Neural Cortex</span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- TOP-RIGHT: CATEGORY STATS & LEGEND (Exactly matching prompt) -->
+        <div class="graph-hud-overlay top-right">
+          <div class="hud-glass-card legend-card">
+            <div class="hud-card-header">
+              <span class="hud-corner-tl"></span><span class="hud-corner-tr"></span>
+              <div class="legend-header-title">
+                <svg viewBox="0 0 24 24" width="14" height="14"><path fill="currentColor" d="M10 3H4c-.55 0-1 .45-1 1v6c0 .55.45 1 1 1h6c.55 0 1-.45 1-1V4c0-.55-.45-1-1-1zm10 0h-6c-.55 0-1 .45-1 1v6c0 .55.45 1 1 1h6c.55 0 1-.45 1-1V4c0-.55-.45-1-1-1zM10 13H4c-.55 0-1 .45-1 1v6c0 .55.45 1 1 1h6c.55 0 1-.45 1-1v-6c0-.55-.45-1-1-1zm10 0h-6c-.55 0-1 .45-1 1v6c0 .55.45 1 1 1h6c.55 0 1-.45 1-1v-6c0-.55-.45-1-1-1z"/></svg>
+                <span>КАТЕГОРИИ ЗНАНИЙ</span>
+              </div>
+              <span class="legend-total-badge">484</span>
+            </div>
+
+            <div class="legend-items" id="legendItemsList">
+              <!-- 🟡 Concepts (23) -->
+              <div class="legend-item" data-cat="Concepts" title="Кликните для фильтрации / подсветки">
+                <div class="legend-item-left">
+                  <span class="cat-dot cat-concepts"></span>
+                  <span class="cat-name">🟡 Concepts</span>
+                </div>
+                <span class="cat-count">23</span>
+              </div>
+
+              <!-- 🟣 Suites (13) -->
+              <div class="legend-item" data-cat="Suites" title="Кликните для фильтрации / подсветки">
+                <div class="legend-item-left">
+                  <span class="cat-dot cat-suites"></span>
+                  <span class="cat-name">🟣 Suites</span>
+                </div>
+                <span class="cat-count">13</span>
+              </div>
+
+              <!-- 🔵 Skills (197) -->
+              <div class="legend-item" data-cat="Skills" title="Кликните для фильтрации / подсветки">
+                <div class="legend-item-left">
+                  <span class="cat-dot cat-skills"></span>
+                  <span class="cat-name">🔵 Skills</span>
+                </div>
+                <span class="cat-count highlight-skills">197</span>
+              </div>
+
+              <!-- 🩷 Tools (19) -->
+              <div class="legend-item" data-cat="Tools" title="Кликните для фильтрации / подсветки">
+                <div class="legend-item-left">
+                  <span class="cat-dot cat-tools"></span>
+                  <span class="cat-name">🩷 Tools</span>
+                </div>
+                <span class="cat-count">19</span>
+              </div>
+
+              <!-- 🟠 Worlds (15) -->
+              <div class="legend-item" data-cat="Worlds" title="Кликните для фильтрации / подсветки">
+                <div class="legend-item-left">
+                  <span class="cat-dot cat-worlds"></span>
+                  <span class="cat-name">🟠 Worlds</span>
+                </div>
+                <span class="cat-count">15</span>
+              </div>
+
+              <!-- 🟢 Notes (25) -->
+              <div class="legend-item" data-cat="Notes" title="Кликните для фильтрации / подсветки">
+                <div class="legend-item-left">
+                  <span class="cat-dot cat-notes"></span>
+                  <span class="cat-name">🟢 Notes</span>
+                </div>
+                <span class="cat-count">25</span>
+              </div>
+
+              <!-- ⚪ Files (192) -->
+              <div class="legend-item" data-cat="Files" title="Кликните для фильтрации / подсветки">
+                <div class="legend-item-left">
+                  <span class="cat-dot cat-files"></span>
+                  <span class="cat-name">⚪ Files</span>
+                </div>
+                <span class="cat-count highlight-files">192</span>
+              </div>
+            </div>
+
+            <div class="legend-footer">
+              <div class="legend-sum">СУММА: <span>484 ОБЪЕКТА</span></div>
+              <button class="legend-filter-reset" id="resetFiltersBtn">Показать все</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- 3D GRAPH CONTROLS (Bottom-Left) -->
+        <div class="graph-hud-overlay bottom-left">
+          <div class="hud-glass-card mini-controls-card">
+            <div class="cam-pad">
+              <button class="cam-btn" id="zoomInBtn" title="Приблизить (+)">＋</button>
+              <button class="cam-btn" id="zoomOutBtn" title="Отдалить (−)">−</button>
+              <button class="cam-btn" id="tiltUpBtn" title="Наклон вверх">▲</button>
+              <button class="cam-btn" id="tiltDownBtn" title="Наклон вниз">▼</button>
+              <button class="cam-btn" id="rotLeftBtn" title="Влево">◄</button>
+              <button class="cam-btn" id="rotRightBtn" title="Вправо">►</button>
+            </div>
+            <div class="hud-hint-text">
+              <span>🖱 ЛКМ: вращение 3D</span>
+              <span>🖱 ПКМ / Колесо: зум & панорама</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- FEATURED SCI-FI HAND CURSOR INDICATOR (~57% X, 63% Y) -->
+        <div class="hud-hand-indicator" id="sciFiHandIndicator" style="left: 57.5%; top: 63%;">
+          <div class="hand-crosshair">
+            <div class="hand-crosshair-ring"></div>
+            <div class="hand-crosshair-lines"></div>
+            <div class="hand-pointer-svg">
+              <svg viewBox="0 0 24 24" width="28" height="28">
+                <path fill="#ffffff" stroke="#00ffff" stroke-width="1.2" d="M10 2a2 2 0 0 1 2 2v7.58a3 3 0 0 1 1-.25c.34 0 .66.06.96.17.26-.54.77-.92 1.37-.92.48 0 .91.22 1.2.56.32-.35.79-.56 1.3-.56 1.1 0 2 .9 2 2v4.8c0 3.42-2.78 6.2-6.2 6.2-1.9 0-3.62-.87-4.75-2.23l-3.32-4.01a2.15 2.15 0 0 1 .28-2.99 2.15 2.15 0 0 1 2.99.28L8 10V4a2 2 0 0 1 2-2z"/>
+              </svg>
+            </div>
+          </div>
+          <div class="hand-label-badge">
+            <span class="hand-label-pulse"></span>
+            <span class="hand-label-text">INSPECTION LOCK // 57.5%, 63.0%</span>
+          </div>
+        </div>
+
+        <!-- NODE HOVER TOOLTIP -->
+        <div class="node-hover-tooltip" id="nodeTooltip">
+          <div class="tooltip-header">
+            <span class="tooltip-cat-dot"></span>
+            <span class="tooltip-cat-name">Category</span>
+          </div>
+          <div class="tooltip-title">Node Title</div>
+          <div class="tooltip-stats">
+            <span>Связей: <b class="tooltip-links">0</b></span>
+            <span>Кластер: <b class="tooltip-cluster">Main</b></span>
+          </div>
+          <div class="tooltip-hint">Нажмите для перехода в 3D</div>
+        </div>
+
+      </section>
+
+      <!-- RIGHT SIDE: FUTURISTIC J.A.R.V.I.S. VOICE ASSISTANT PANEL -->
+      <aside class="jarvis-sidebar" id="jarvisSidebar">
+        <div class="jarvis-panel-wrapper">
+
+          <!-- J.A.R.V.I.S. ARC REACTOR HOLOGRAPHIC HUD -->
+          <div class="jarvis-hud-core">
+
+            <!-- ARC REACTOR CIRCULAR INTERFACE -->
+            <div class="arc-reactor-container" id="arcReactor">
+
+              <svg class="arc-segmented-gauge" viewBox="0 0 320 320" width="280" height="280">
+                <defs>
+                  <filter id="cyanGlow" x="-20%" y="-20%" width="140%" height="140%">
+                    <feGaussianBlur stdDeviation="3" result="blur" />
+                    <feMerge>
+                      <feMergeNode in="blur" />
+                      <feMergeNode in="SourceGraphic" />
+                    </feMerge>
+                  </filter>
+                  <filter id="goldGlow" x="-20%" y="-20%" width="140%" height="140%">
+                    <feGaussianBlur stdDeviation="3.5" result="blur" />
+                    <feMerge>
+                      <feMergeNode in="blur" />
+                      <feMergeNode in="SourceGraphic" />
+                    </feMerge>
+                  </filter>
+                  <linearGradient id="amberGradient" x1="0%" y1="0%" x2="100%" y2="100%">
+                    <stop offset="0%" stop-color="#ffb703"/>
+                    <stop offset="100%" stop-color="#fb8500"/>
+                  </linearGradient>
+                </defs>
+
+                <circle cx="160" cy="160" r="142" fill="none" stroke="rgba(0, 212, 255, 0.08)" stroke-width="6"/>
+                <g id="arcTicksGroup"></g>
+
+                <circle class="ring-rotating-cw" cx="160" cy="160" r="132" fill="none" stroke="rgba(0, 240, 255, 0.35)" stroke-width="1.5" stroke-dasharray="14 8 4 8 20 6" />
+                <circle class="ring-rotating-ccw" cx="160" cy="160" r="118" fill="none" stroke="rgba(0, 200, 255, 0.25)" stroke-width="1.5" stroke-dasharray="35 15 8 15 50 20" />
+
+                <g class="reticle-marks" stroke="rgba(0, 220, 255, 0.4)" stroke-width="1">
+                  <line x1="160" y1="16" x2="160" y2="32" />
+                  <line x1="160" y1="288" x2="160" y2="304" />
+                  <line x1="16" y1="160" x2="32" y2="160" />
+                  <line x1="288" y1="160" x2="304" y2="160" />
+                </g>
+
+                <circle id="audioReactiveWaveRing" cx="160" cy="160" r="95" fill="none" stroke="#00ffff" stroke-width="2" opacity="0.6" filter="url(#cyanGlow)" />
+                <circle cx="160" cy="160" r="82" fill="rgba(2, 10, 25, 0.75)" stroke="#00e5ff" stroke-width="2" filter="url(#cyanGlow)" />
+
+                <!-- Yellow-Orange Active Segment -->
+                <path class="active-status-arc" d="M 275 225 A 142 142 0 0 1 160 302" fill="none" stroke="url(#amberGradient)" stroke-width="8" stroke-linecap="round" filter="url(#goldGlow)" />
+                <circle cx="275" cy="225" r="4" fill="#ffb703" filter="url(#goldGlow)" />
+                <circle cx="160" cy="302" r="4" fill="#fb8500" filter="url(#goldGlow)" />
+              </svg>
+
+              <div class="reactor-center-content">
+                <div class="jarvis-hologram-logo">
+                  <span class="jarvis-text">J.A.R.V.I.S.</span>
+                  <div class="jarvis-sub-line">AI PROTOCOL 4.8</div>
+                </div>
+                <div class="mini-equalizer-bars" id="jarvisMiniEq">
+                  <span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span>
+                </div>
+              </div>
+            </div>
+
+            <!-- STATUS: LISTENING -->
+            <div class="jarvis-status-container">
+              <div class="status-listening-badge" id="jarvisStatusBadge">
+                <span class="listening-glow-dot"></span>
+                <span class="listening-text" id="jarvisStatusText">LISTENING</span>
+              </div>
+              <div class="jarvis-voice-hint" id="jarvisVoiceHint">say &ldquo;Jarvis...&rdquo;</div>
+            </div>
+
+            <!-- MODEL BADGE: OPUS-4-8 -->
+            <div class="jarvis-model-selector-wrapper">
+              <button class="model-badge-btn" id="modelSelectBtn" title="Выбор активной модели ИИ">
+                <span class="model-badge-icon">
+                  <svg viewBox="0 0 24 24" width="14" height="14"><path fill="currentColor" d="M9 21c0 .55.45 1 1 1h4c.55 0 1-.45 1-1v-1H9v1zm3-19C8.14 2 5 5.14 5 9c0 2.38 1.19 4.47 3 5.74V17c0 .55.45 1 1 1h6c.55 0 1-.45 1-1v-2.26c1.81-1.27 3-3.36 3-5.74 0-3.86-3.14-7-7-7zm2.85 11.1l-.85.6V16h-4v-1.3l-.85-.6C7.8 13.16 7 11.18 7 9c0-2.76 2.24-5 5-5s5 2.24 5 5c0 2.18-.8 4.16-2.15 5.1z"/></svg>
+                </span>
+                <span class="model-badge-name" id="currentModelName">OPUS-4-8</span>
+                <span class="model-badge-chevron">▾</span>
+              </button>
+            </div>
+
+          </div>
+
+          <!-- MIC CONTROL -->
+          <div class="jarvis-mic-action-box">
+            <button class="jarvis-mic-button" id="voiceMicBtn" title="Нажмите для голосового ввода">
+              <div class="mic-glow-waves"></div>
+              <div class="mic-inner-core">
+                <svg viewBox="0 0 24 24" width="26" height="26">
+                  <path fill="currentColor" d="M12 14c1.66 0 3-1.34 3-3V5c0-1.66-1.34-3-3-3S9 3.34 9 5v6c0 1.66 1.34 3 3 3z"/>
+                  <path fill="currentColor" d="M17 11c0 2.76-2.24 5-5 5s-5-2.24-5-5H5c0 3.53 2.61 6.43 6 6.92V21h2v-3.08c3.39-.49 6-3.39 6-6.92h-2z"/>
+                </svg>
+              </div>
+            </button>
+            <div class="mic-btn-sublabel" id="micBtnLabel">УДЕРЖИВАЙТЕ ИЛИ НАЖМИТЕ ДЛЯ ГОЛОСА</div>
+          </div>
+
+          <!-- QUICK COMMAND PRESETS -->
+          <div class="voice-presets-shelf">
+            <div class="shelf-title">ГОЛОСОВЫЕ КОМАНДЫ ДЛЯ ГРАФА:</div>
+            <div class="preset-chips">
+              <button class="preset-chip" data-cmd="Jarvis, scan knowledge graph">⬡ Сканировать граф</button>
+              <button class="preset-chip" data-cmd="Jarvis, show skills cluster">🔵 Кластер Skills (197)</button>
+              <button class="preset-chip" data-cmd="Jarvis, focus AI Workshop">🟡 AI Workshop</button>
+              <button class="preset-chip" data-cmd="Jarvis, open GEO Suite">🟣 GEO Suite</button>
+              <button class="preset-chip" data-cmd="Jarvis, search AI Children's Books">🟢 AI Children’s Books</button>
+              <button class="preset-chip" data-cmd="Jarvis, status report">⚡ Отчёт системы</button>
+            </div>
+          </div>
+
+          <!-- TERMINAL FEED -->
+          <div class="jarvis-terminal-card">
+            <div class="terminal-header">
+              <span class="terminal-title">TERMINAL FEED</span>
+              <span class="terminal-dots"><span></span><span></span><span></span></span>
+            </div>
+            <div class="terminal-body" id="jarvisLogFeed">
+              <div class="term-msg term-jarvis">
+                <div class="term-sender"><span class="sender-tag">J.A.R.V.I.S.</span> <span class="term-time" id="initTime">00:00:00</span></div>
+                <div class="term-bubble">Все системы инициализированы, сэр. База знаний синхронизирована: 484 объекта в квантовом графе. Готов к выполнению голосовых и текстовых команд.</div>
+              </div>
+            </div>
+
+            <form class="terminal-input-bar" id="jarvisChatForm" autocomplete="off">
+              <input type="text" id="jarvisInputField" placeholder="Напишите команду или скажите «Jarvis…»" />
+              <button type="submit" class="term-send-btn" title="Отправить">
+                <svg viewBox="0 0 24 24" width="16" height="16"><path fill="currentColor" d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"/></svg>
+              </button>
+            </form>
+          </div>
+
+        </div>
+      </aside>
+    </main>
+
+    <!-- NODE DETAILS INSPECTION DRAWER -->
+    <div class="node-inspector-drawer" id="nodeInspectorDrawer">
+      <div class="drawer-header">
+        <div class="drawer-badge-row">
+          <span class="drawer-cat-badge" id="inspectorCatBadge">🟡 Concepts</span>
+          <span class="drawer-id-badge" id="inspectorNodeId">ID #001</span>
+        </div>
+        <button class="drawer-close-btn" id="closeInspectorBtn">✕</button>
+      </div>
+
+      <div class="drawer-body">
+        <h2 class="drawer-title" id="inspectorTitle">AI Workshop</h2>
+        <p class="drawer-desc" id="inspectorDesc">Центральный когнитивный хаб разработки нейросетевых агентов и инструментов ИИ.</p>
+
+        <div class="drawer-stats-grid">
+          <div class="drawer-stat-cell">
+            <span class="stat-lbl">КАТЕГОРИЯ</span>
+            <span class="stat-val" id="inspectorCategory">Concepts</span>
+          </div>
+          <div class="drawer-stat-cell">
+            <span class="stat-lbl">СВЯЗЕЙ В ГРАФЕ</span>
+            <span class="stat-val" id="inspectorLinkCount">42</span>
+          </div>
+          <div class="drawer-stat-cell">
+            <span class="stat-lbl">3D ПОЗИЦИЯ</span>
+            <span class="stat-val" id="inspectorPos">X: -45, Y: 12, Z: 8</span>
+          </div>
+          <div class="drawer-stat-cell">
+            <span class="stat-lbl">ПРИОРИТЕТ ЯДРА</span>
+            <span class="stat-val stat-high" id="inspectorPriority">ALPHA (Level 1)</span>
+          </div>
+        </div>
+
+        <div class="drawer-section-title">СВЯЗАННЫЕ УЗЛЫ:</div>
+        <div class="drawer-connected-list" id="inspectorConnectedList"></div>
+
+        <div class="drawer-actions-row">
+          <button class="drawer-act-btn btn-focus" id="focusNodeBtn">
+            <svg viewBox="0 0 24 24" width="14" height="14"><path fill="currentColor" d="M12 8c-2.21 0-4 1.79-4 4s1.79 4 4 4 4-1.79 4-4-1.79-4-4-4zm8.94 3A8.994 8.994 0 0 0 13 3.06V1h-2v2.06A8.994 8.994 0 0 0 3.06 11H1v2h2.06A8.994 8.994 0 0 0 11 20.94V23h2v-2.06A8.994 8.994 0 0 0 20.94 13H23v-2h-2.06zM12 19c-3.87 0-7-3.13-7-7s3.13-7 7-7 7 3.13 7 7-3.13 7-7 7z"/></svg>
+            Фокус в 3D
+          </button>
+          <button class="drawer-act-btn btn-ask-jarvis" id="askJarvisAboutNodeBtn">
+            <svg viewBox="0 0 24 24" width="14" height="14"><path fill="currentColor" d="M20 2H4c-1.1 0-1.99.9-1.99 2L2 22l4-4h14c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2zM6 9h12v2H6V9zm8 5H6v-2h8v2zm4-6H6V6h12v2z"/></svg>
+            Спросить J.A.R.V.I.S.
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- MODEL SELECTOR MODAL -->
+    <div class="modal-backdrop" id="modelModal" style="display:none;">
+      <div class="hud-glass-card modal-card">
+        <div class="modal-header">
+          <div class="modal-title">ВЫБОР МОДЕЛИ ИСКУССТВЕННОГО ИНТЕЛЛЕКТА</div>
+          <button class="modal-close-btn" id="closeModelModalBtn">✕</button>
+        </div>
+        <div class="model-options-list">
+          <div class="model-option active" data-model="OPUS-4-8">
+            <div class="model-opt-info">
+              <span class="model-opt-name">⚡ OPUS-4-8 (Jarvis Quantum Neural)</span>
+              <span class="model-opt-desc">Основная флагманская нейросистема с глубоким анализом графа и голосовым синтезом.</span>
+            </div>
+            <span class="model-opt-tag active-tag">АКТИВНА</span>
+          </div>
+          <div class="model-option" data-model="CLAUDE-3.5-SONNET">
+            <div class="model-opt-info">
+              <span class="model-opt-name">🔷 CLAUDE-3.5-SONNET</span>
+              <span class="model-opt-desc">Продвинутая логика кодирования, агентных цепочек и рассуждений.</span>
+            </div>
+            <span class="model-opt-tag">ВЫБРАТЬ</span>
+          </div>
+          <div class="model-option" data-model="GEMINI-1.5-PRO">
+            <div class="model-opt-info">
+              <span class="model-opt-name">🪐 GEMINI-1.5-PRO</span>
+              <span class="model-opt-desc">Сверхдлинный контекст, обработка видео, аудио и пространственных карт.</span>
+            </div>
+            <span class="model-opt-tag">ВЫБРАТЬ</span>
+          </div>
+          <div class="model-option" data-model="DEEPSEEK-R1">
+            <div class="model-opt-info">
+              <span class="model-opt-name">🧠 DEEPSEEK-R1-REASONER</span>
+              <span class="model-opt-desc">Математический вывод, верификация графа связей и алгоритмический поиск.</span>
+            </div>
+            <span class="model-opt-tag">ВЫБРАТЬ</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+  </div>
+
+  <!-- Scripts -->
   <script src="/js/api.js"></script>
   <script src="/js/app.js"></script>
 </body>

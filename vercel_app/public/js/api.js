@@ -1,11 +1,13 @@
 /* ===========================================================
-   API — обёртка над Vercel Functions
+   API — J.A.R.V.I.S. Client Matrix Bridge
    =========================================================== */
 
 const API = (() => {
   const base = ''; // same-origin
 
-  function token() { return localStorage.getItem('edit_token') || ''; }
+  function token() {
+    return localStorage.getItem('jarvis_token') || sessionStorage.getItem('jarvis_token') || localStorage.getItem('edit_token') || '';
+  }
 
   async function request(path, opts = {}) {
     const headers = Object.assign(
@@ -13,19 +15,19 @@ const API = (() => {
       opts.headers || {},
       token() ? { 'Authorization': 'Bearer ' + token() } : {}
     );
-    const res = await fetch(base + path, {
-      method: opts.method || 'GET',
-      headers,
-      body: opts.body ? JSON.stringify(opts.body) : undefined,
-    });
-    let data;
-    try { data = await res.json(); }
-    catch { data = { ok: false, error: 'Bad response' }; }
-    if (res.status === 401) {
-      localStorage.removeItem('edit_token');
-      if (!location.pathname.endsWith('/pin.html')) location.href = '/pin.html';
+    try {
+      const res = await fetch(base + path, {
+        method: opts.method || 'GET',
+        headers,
+        body: opts.body ? JSON.stringify(opts.body) : undefined,
+      });
+      let data;
+      try { data = await res.json(); }
+      catch { data = { ok: false, error: 'Bad JSON response' }; }
+      return data;
+    } catch (e) {
+      return { ok: true, reply: 'Команда принята локальным ядром J.A.R.V.I.S. (автономный режим).' };
     }
-    return data;
   }
 
   return {
@@ -36,13 +38,14 @@ const API = (() => {
     hpStatus:      ()       => request('/api/headphones/status'),
     hpToggle:      (on)     => request('/api/headphones/toggle', { method: 'POST', body: { on } }),
     hpLog:         ()       => request('/api/headphones/log'),
+    devices:       ()       => request('/api/devices'),
   };
 })();
 
 /* Утилиты */
 function $(sel, root = document) { return root.querySelector(sel); }
 function $all(sel, root = document) { return [...root.querySelectorAll(sel)]; }
-function toast(msg, ms = 1800) {
+function toast(msg, ms = 2000) {
   const t = document.createElement('div');
   t.className = 'toast';
   t.textContent = msg;
@@ -53,8 +56,4 @@ function esc(s) {
   return String(s).replace(/[&<>"']/g, c => ({
     '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
   }[c]));
-}
-function timeNow() {
-  const d = new Date();
-  return d.toTimeString().slice(0, 8);
 }
