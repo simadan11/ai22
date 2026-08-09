@@ -45,8 +45,8 @@
     state = s;
     orb.className = "orb" + (s === "listen" ? " listen" : s === "speak" ? " speak" : s === "think" ? " think" : "");
     const map = {
-      idle:   ["", "НАЖМИ НА ОРБ И ГОВОРИ", "или скажи «EDIT, …»"],
-      listen: ["listen", "СЛУШАЮ…", "говори"],
+      idle:   ["", "ТАПНИ ПО НАУШНИКУ", "затем скажи «EDIT, …вопрос…»"],
+      listen: ["listen", "СЛУШАЮ…", "скажи «EDIT, …»"],
       speak:  ["speak", "ГОВОРЮ…", ""],
       think:  ["think", "ДУМАЮ…", ""],
       err:    ["err", "НЕТ СЕТИ", ""],
@@ -97,7 +97,9 @@
     login.style.display = "none";
     app.classList.add("active");
     $("asst-name").textContent = profile.name;
-    sysMsg("EDIT готов. Нажми на орб (или тапни по наушнику) и говори. Скажи «EDIT, …» — и я отвечу.");
+    // телефонный режим: сразу включаем наушники (тап по наушнику = слушать)
+    if ("mediaSession" in navigator || hpBtn) enableHpMode();
+    sysMsg("Надень наушники. Тапни по наушнику и скажи: «EDIT, …вопрос…» — я отвечу.");
     if (alwaysListen) startAlwaysListen();
   }
   async function tryLogin() {
@@ -295,7 +297,13 @@
   });
 
   // ── speech recognition ────────────────────────────────────────────────
-  let manualListen = false;
+  // Режим телефона: слушаем ТОЛЬКО когда нажали на наушник (или кнопку 🎤 /
+  // орб). Отвечаем ТОЛЬКО на вопрос, который прозвучал после слова «EDIT»:
+  //   «EDIT, какой сегодня день?» → EDIT отвечает на «какой сегодня день?»
+  //   «какой сегодня день?» (без EDIT)  → EDIT молчит и ждёт следующего тапа.
+  let contRestart = false;  // поймали только «EDIT» → переслушиваем вопрос
+  let pendingRestart = false; // «EDIT» без вопроса → перезапустить в onend
+
   function startRecognition(opts = {}) {
     const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
     if (!SR) { toast("Распознавание не поддерживается этим браузером"); return; }
@@ -305,23 +313,49 @@
       rec.lang = profile.lang;
       rec.interimResults = false;
       rec.maxAlternatives = 1;
-      manualListen = !!opts.manual;
+      if (opts.cont) contRestart = true;
       rec.onstart = () => { listening = true; micBtn.classList.add("rec"); micBtn.querySelector(".mic-ico").textContent = "🔴"; setState("listen"); holdWakeLock(); };
       rec.onresult = (e) => {
         const txt = e.results[0][0].transcript.trim();
         if (!txt) return;
-        // wake-word: "edit"/"эдит" в начале → команда; иначе игнор (в режиме всегда-слушать)
-        const m = txt.match(/^(?:edit|edith|эдит|едит|джарвис)[\s,.:]+(.*)$/i);
-        if (m) { send(m[1] || "привет"); return; }
-        if (manualListen) { send(txt); return; }
-        // случайный текст без wake-word — не отвечаем
+        // ищем «EDIT» в начале фразы (эдит/едит/edith/джарвис)
+        const m = txt.match(/^(?:edit|edith|эдит|едит|джарвис)[\s,.:]*(.*)$/i);
+        if (m) {
+          const question = (m[1] || "").trim();
+          if (question) {
+            send(question);              // отвечаем на то, что после «EDIT»
+          } else {
+            // сказали только «EDIT» — слушаем дальше, ждём вопрос
+            toast("Слушаю… назови вопрос");
+            pendingRestart = true;
+          }
+          return;
+        }
+        // вопрос после «EDIT» (мы переслушиваем) — отправляем как есть
+        if (contRestart) {
+          contRestart = false;
+          send(txt);
+          return;
+        }
+        // без «EDIT» — молчим и ждём следующего тапа по наушнику
+        toast("Скажи: «EDIT, …» — и я отвечу");
       };
       rec.onerror = (e) => { if (e.error !== "aborted" && e.error !== "no-speech") toast("Микрофон: " + e.error); };
       rec.onend = () => {
         listening = false;
         micBtn.classList.remove("rec");
         micBtn.querySelector(".mic-ico").textContent = "🎤";
-        if (alwaysListen && !busy && !manualListen) {
+        // сказали только «EDIT» → переслушиваем, ждём сам вопрос
+        if (pendingRestart && !busy) {
+          pendingRestart = false;
+          startRecognition({ cont: true });
+          return;
+        }
+        const wasCont = contRestart;
+        contRestart = false;
+        pendingRestart = false;
+        // режим «всегда слушать» (опция) — слушаем непрерывно
+        if (alwaysListen && !busy && !wasCont) {
           setTimeout(() => { if (alwaysListen && !listening) startRecognition(); }, 250);
         }
         if (!speechSynthesis.speaking) setState("idle");
@@ -337,28 +371,27 @@
     micBtn.classList.remove("rec");
     micBtn.querySelector(".mic-ico").textContent = "🎤";
   }
-  micBtn.addEventListener("click", () => {
-    if (listening) { stopRecognition(); setState("idle"); return; }
+  function listenViaTap() {
+    // тап по наушнику / кнопке 🎤 / орбу — начать или остановить слушание
+    if (listening) { stopRecognition(); setState("idle"); toast("Слушание остановлено"); return; }
     startRecognition({ manual: true });
-  });
-  orb.addEventListener("click", () => {
-    if (listening) { stopRecognition(); setState("idle"); return; }
-    startRecognition({ manual: true });
-  });
+  }
+  micBtn.addEventListener("click", listenViaTap);
+  orb.addEventListener("click", listenViaTap);
   function startAlwaysListen() {
     if (!window.SpeechRecognition && !window.webkitSpeechRecognition) return;
     if (!listening) startRecognition();
   }
 
-  // ── headphones (AVRCP) ────────────────────────────────────────────────
+  // ── headphones (AVRCP) — управление только с наушника ─────────────────
   function enableHpMode() {
     hpOn = true;
     hpBtn.classList.add("on");
-    hpBtn.title = "Режим наушников ON — тап по наушнику = говорить";
+    hpBtn.title = "Режим наушников ON — тап по наушнику = «EDIT, вопрос…»";
     if ("mediaSession" in navigator) {
       try {
         navigator.mediaSession.metadata = new MediaMetadata({ title: profile.name + " — Headphones", artist: profile.name });
-        const press = () => { stopTts(); if (listening) { stopRecognition(); setState("idle"); } else startRecognition({ manual: true }); };
+        const press = () => { stopTts(); listenViaTap(); };
         for (const a of ["playpause", "play", "pause", "previoustrack", "nexttrack"]) {
           try { navigator.mediaSession.setActionHandler(a, press); } catch (_) {}
         }
@@ -371,7 +404,7 @@
         hpAudio.play().catch(() => {});
       }
     } catch (_) {}
-    toast("🎧 Наушники: тап по наушнику — говорить");
+    toast("🎧 Тапни по наушнику и скажи: «EDIT, …»");
   }
   hpBtn.addEventListener("click", enableHpMode);
   function silentWav() {
