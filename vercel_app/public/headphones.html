@@ -1,0 +1,104 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="theme-color" content="#0a0e1a" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <title>Наушники · EDIT</title>
+  <link rel="manifest" href="/manifest.webmanifest" />
+  <link rel="icon" type="image/svg+xml" href="/icons/icon.svg" />
+  <link rel="stylesheet" href="/css/style.css" />
+</head>
+<body class="page-headphones">
+  <div class="scanline"></div>
+
+  <header class="topbar">
+    <a href="/index.html" class="back-btn" aria-label="Назад">‹</a>
+    <div class="brand">
+      <span class="brand-dot"></span>
+      <span class="brand-name">Наушники</span>
+    </div>
+    <div class="status" id="hpStatus">
+      <span class="dot"></span><span class="text">offline</span>
+    </div>
+  </header>
+
+  <main class="container">
+
+    <!-- Большой индикатор -->
+    <section class="hp-hero">
+      <div class="hp-orb" id="hpOrb">
+        <div class="hp-orb-core"></div>
+        <div class="hp-orb-pulse"></div>
+      </div>
+      <h1 id="hpTitle">Режим наушников</h1>
+      <p class="hero-sub" id="hpSub">Нажми кнопку ниже, чтобы начать слушать</p>
+    </section>
+
+    <!-- Статус -->
+    <section class="hp-stats">
+      <div class="stat">
+        <div class="stat-label">Устройство</div>
+        <div class="stat-value" id="hpDevice">— не подключено —</div>
+      </div>
+      <div class="stat">
+        <div class="stat-label">Микрофон</div>
+        <div class="stat-value" id="hpMic">—</div>
+      </div>
+      <div class="stat">
+        <div class="stat-label">Активность</div>
+        <div class="stat-value" id="hpActivity">idle</div>
+      </div>
+    </section>
+
+    <!-- Визуализатор звука -->
+    <section class="hp-visual">
+      <div class="bars" id="hpBars" aria-hidden="true">
+        <!-- 24 бара, генерируются в JS -->
+      </div>
+    </section>
+
+    <!-- Главная кнопка -->
+    <section class="hp-controls">
+      <button class="hp-push" id="hpPush">
+        <span class="hp-push-ring"></span>
+        <span class="hp-push-inner">
+          <span class="hp-push-mic">🎙</span>
+        </span>
+        <span class="hp-push-label" id="hpPushLabel">УДЕРЖИВАЙ И ГОВОРИ</span>
+      </button>
+
+      <div class="hp-row">
+        <button class="chip" id="hpToggleMode">Включить режим</button>
+        <button class="chip ghost" id="hpSync">⟳ Синхронизировать</button>
+      </div>
+    </section>
+
+    <!-- Лог событий -->
+    <section class="hp-log">
+      <h3>События</h3>
+      <ol id="hpLog">
+        <li class="muted">Жду подключения…</li>
+      </ol>
+    </section>
+
+    <!-- Подвал -->
+    <nav class="tabbar">
+      <a href="/index.html" class="tab">
+        <span class="tab-ico">◉</span><span>Пульт</span>
+      </a>
+      <a href="/headphones.html" class="tab active">
+        <span class="tab-ico">🎧</span><span>Наушники</span>
+      </a>
+      <a href="#" class="tab" id="logoutBtn2">
+        <span class="tab-ico">⏻</span><span>Выйти</span>
+      </a>
+    </nav>
+  </main>
+
+  <script src="/js/api.js"></script>
+  <script src="/js/headphones.js"></script>
+</body>
+</html>
