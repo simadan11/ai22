@@ -45,11 +45,51 @@ It's not just an assistant — it's an extension of your digital life.
 | 🖱️ Desktop Control | Taskbar, window management, and desktop-level operations |
 | 🧑‍💻 Silent Language Memory | Detects spoken language on first use — all future sessions adapt automatically |
 | 📱 Remote Dashboard | Control the assistant from your phone via QR code pairing |
+| 🎧 Headphones Mode | Bluetooth headphones paired to the phone or the PC become a hands-free channel: EDIT speaks through them, hears you via the headset mic, and the headphone's own button is push-to-listen |
 | 📷 Phone Camera Vision | EDITH-style scan from the phone camera — labels people, cars & plates on a live HUD, JARVIS answers by voice on PC **and** phone |
 | ◈ Holo Lab | Create any hologram/blueprint, assemble a buy/make BOM, run diagnostics and print a build report — smart glasses, robot, vehicle, building, planet or custom geometry |
 | ⚡ Auto-Start on Boot | Registers with the OS startup system (registry / LaunchAgent / .desktop) |
 | 📋 Clipboard Intelligence | Copy any text → floating panel with Translate / Summarise / Explain / Fix |
 | 🎨 Assistant Customization | Change the assistant name and your name from the UI — takes effect immediately |
+
+---
+
+## 🌐 Internet Access — use EDIT from anywhere over mobile data (no WiFi)
+
+When you leave home there is no WiFi, so the local address `192.168.x.x:8000` is unreachable. EDIT can open a **public HTTPS tunnel** (Cloudflare quick tunnel or ngrok) that gives you an internet URL — open it on your phone over **mobile data** and the same Remote Dashboard works: headphones mode 🎧, voice channel, EDITH camera.
+
+### How to use
+1. **Install a tunnel engine on the PC** (one time):
+   - Cloudflare (recommended, free, no account):
+     - Windows: `winget install cloudflare.cloudflared` (or download `cloudflared.exe` from the releases page),
+     - macOS: `brew install cloudflared`,
+     - Linux: `sudo apt install cloudflared`.
+   - or ngrok: https://ngrok.com/download
+2. In EDIT press **🌐 INTERNET ACCESS** in the settings drawer (⚙️), or say *«включи интернет доступ»* / *«internet access on»*.
+3. EDIT shows the internet URL (e.g. `https://xxxx.trycloudflare.com`) on the content panel and in the log.
+4. Open that URL on the phone — even on mobile data, away from home. A phone that already paired at home (device token) enters automatically; a new phone needs the PIN from Remote Control.
+
+To turn it off: press **🌐** again or say *«выключи интернет доступ»*. The mode can auto-start with EDIT (`internet_tunnel: true` in `config/api_keys.json`).
+
+> 🔒 The tunnel URL is random on every start (quick tunnels). For a **permanent** address, create a free Cloudflare account, set up a named tunnel, and put your stable URL in `config/api_keys.json` → `tunnel_static_url`. Auth still applies (PIN / paired device token), and API/WS traffic is never cached by the service worker.
+> 📶 Voice over mobile data works but latency is higher than on LAN — fine for commands, slightly delayed for back-and-forth conversation.
+
+---
+
+## 📲 Install EDIT on your phone as an app (PWA)
+
+The Remote Dashboard is an installable web app (PWA) — you get an icon on the home screen, a full-screen window and a faster start, so the assistant feels like a real app on the phone.
+
+**Android (Chrome):**
+1. Open the Remote Dashboard on the phone (pair via **Remote Control** QR first — the pairing is remembered automatically after the first scan).
+2. Tap the **⤓** button in the header (it appears when the app is installable), or open the browser menu **⋮ → «Добавить на главный экран» / «Установить приложение»**.
+3. Confirm — an **EDIT** icon appears on the home screen. Tap it to launch the dashboard in its own full-screen window. First launch may ask to re-pair if the app data was cleared; normally it reconnects automatically via the remembered device token.
+
+**iPhone / iPad (Safari):**
+1. Open the dashboard, then tap **Share (⤴) → «На экран „Домой"»**.
+2. Add — an EDIT icon appears on the home screen. (iOS runs the dashboard in a standalone Safari window.)
+
+Notes: the installed app keeps working as the remote: headphones mode (🎧), voice channel, EDITH camera, Holo Lab. It also holds the screen wake lock during headphones mode, so the display stays on. The app needs the PC to be running — it is a remote control, not a standalone server.
 
 ---
 
@@ -91,6 +131,67 @@ Open **◈ HOLO** in the Remote Dashboard — or open **◈ HOLO LAB / PC MONITO
 11. You can also say or type *"создай полностью любую голограмму автомобиля и покажи чертёж по частям"*. The `holo_project` tool generates the subject, component list, geometry and suggested parts, opens the PC Holo Lab automatically and mirrors the project to connected dashboards.
 
 This is an honest software prototype: it renders a hologram-style visualization on a phone/PC screen and can use a camera, but it cannot create a physical free-space hologram or switch on hardware by itself. Before building any real wearable, validate optics, heat, battery safety, fit, privacy and local regulations.
+
+---
+
+## 🎧 Headphones Mode — talk to EDIT through Bluetooth headphones
+
+The headphones can be paired either to the **phone** (Remote Dashboard) or to the **PC** — EDIT supports both.
+
+### 🗣️ Wake Bracket Protocol — «EDIT … команда … EDIT» (default ON)
+
+By default EDIT answers **only** voice commands framed between two standalone **«EDIT»** words:
+
+1. Say **«EDIT»** (эдит / едит / edith) — EDIT starts paying attention but stays silent.
+2. Say your command: «EDIT, включи музыку, EDIT».
+3. Say **«EDIT»** again — EDIT answers exactly what was said between the two words.
+
+EDIT hears everything, but outside the frame it stays completely silent (no reaction to a single name, noise, or unframed questions). The wake word must be a standalone word — «отредактируй», «редактировать», «editable» etc. do **not** trigger it. While EDIT is speaking you can interrupt by saying «EDIT» — it stops and listens.
+
+The protocol is saved in `config/api_keys.json` as `wake_bracket` (default `true`) and can be switched off by voice: *«выключи режим EDIT в начале и в конце»* (then EDIT responds to everything) or back on with *«включи wake protocol»*.
+
+### 🗣️ Voice: PC speaks as always, phone headphones use the Jarvis Voice Module
+
+- **On the PC — the voice is as always:** the AI's own audio plays through the PC speakers (default). No TTS module involved.
+- **Phone headphones mode — improved Jarvis Voice Module:** the AI's audio is discarded and the reply text is voiced by a dedicated module with a **Jarvis-quality Russian voice** — deep male neural voice **ru-RU-DmitryNeural** (EdgeTTS), synthesised on the PC and streamed as PCM to the phone's single sink tab (= your headphones). Exactly one voice, never two; no robotic phone TTS. The replies are generated in Russian anyway, so the Russian voice matches.
+  - Fallback: if `edge-tts`/`miniaudio` are not installed, the phone's own `speechSynthesis` is used instead.
+  - The headphone button / saying «EDIT» stops the Jarvis voice instantly.
+
+Configuration (`config/api_keys.json`): `tts_jarvis_voice` (default `ru-RU-DmitryNeural` — pick any EdgeTTS voice, e.g. `ru-RU-SvetlanaNeural` female, `en-GB-RyanNeural` for English Jarvis). The optional PC TTS mode (`tts_voice_mode`, default `false`) is toggled by voice: *«включи TTS модуль»* / *«пусть ИИ говорит как всегда»*.
+
+### 📱 Headphones connected to the phone (main scenario)
+
+1. Open the **Remote Dashboard** on your phone (pair via **Remote Control** QR) and tap the **🎧** chip in the header.
+2. EDIT asks for microphone access once (that is the headset mic). The mode is now ON — the chip lights up.
+3. Press the **button on your Bluetooth headphones** — EDIT instantly stops talking and listens to you through the headset:
+   - the press is caught by the phone (browser media session → `/api/headphones/button`);
+   - the phone streams its microphone (the headset mic) to the PC, so EDIT hears you;
+   - EDIT's reply is voiced by the **Jarvis Voice Module** (deep Russian male neural voice, ru-RU-DmitryNeural) straight into your headphones.
+
+Notes:
+
+- **No double voice, guaranteed:** while the phone's 🎧 mode is ON the AI's audio is not used at all (Gemini returns text only), the PC speaker is muted automatically, and the phone tab that runs the mode is the single audio sink — no other tab/device voices the reply. Even with the dashboard open in two tabs you hear exactly one voice. The mode is restored after a page reload.
+- **Screen stays on:** while the mode is ON (or the phone mic is streaming) the phone requests a **screen wake lock**, so the display never goes black and the browser never suspends the sound/mic. When the app returns to the foreground, the lock and audio contexts are resumed automatically. (Requires HTTPS — the dashboard already runs over HTTPS.)
+- Works best in **Chrome on Android** (`navigator.mediaSession`). If the phone is also playing music in another app, the button controls that app instead — pause it first.
+- **Works with Gelius and any other Bluetooth earbuds/headset** — they all send the standard AVRCP play/pause command on the multifunction button (on Gelius TWS earbuds it's a **single tap** on the earbud). EDIT listens to all of the play/pause/next/prev actions, so any of them triggers push-to-listen.
+- While the mode is ON the tab keeps a silent media session so the button reaches EDIT, and the headset-mic channel is open (tap 🎤 to stop it manually, 🎧 again to turn the mode off).
+
+### 🖥️ Headphones connected to the PC
+
+- Press **🎧 HEADPHONES MODE** in the settings drawer (⚙️), or say *"включи режим наушников"* / *"headphones mode on"*.
+
+| What | What happens |
+|---|---|
+| 🎧 Output | EDIT's voice plays through the headphones (A2DP/stereo endpoint) instead of the PC speakers |
+| 🎤 Input | EDIT hears you through the headset microphone (Hands-Free endpoint; falls back to the default PC mic if the headset has none) |
+| 🔘 Headphone button | The multifunction button on the headphones (AVRCP play/pause) becomes **push-to-listen** — tap it while EDIT is talking and EDIT instantly stops and listens to you through the headset |
+
+PC-side details:
+
+- **Auto-switch** — the mode re-checks Bluetooth every ~10 s: connect your headset later and EDIT switches over automatically; unplug it and the audio falls back to the default devices.
+- **Remembered** — the mode is saved to `config/api_keys.json` (`headphones_mode`) and restored on the next start.
+- **Voice control** — the `headphones_mode` tool answers *"наушники"*, *"режим наушников"*, *"bluetooth headphones"*, *"говори через наушники"*, etc.
+- **Button capture** — Windows-only, requires `pip install keyboard` (already in `requirements.txt`). Without it the mode still reroutes the audio; only the headphone-button trigger is unavailable.
 
 ---
 

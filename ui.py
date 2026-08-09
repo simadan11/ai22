@@ -3090,6 +3090,8 @@ class MainWindow(QMainWindow):
     _pcam_frame_sig = pyqtSignal(bytes)          # phone live frame → HUD area
     _pcam_dets_sig  = pyqtSignal(object)         # live detections for the current frame
     _clipboard_sig  = pyqtSignal(str)        # clipboard text changed (thread-safe)
+    _headphones_sig = pyqtSignal(object)     # headphones-mode status dict (thread-safe)
+    _internet_sig   = pyqtSignal(object)     # internet-tunnel status dict (thread-safe)
 
     def __init__(self, face_path: str):
         super().__init__()
@@ -3118,6 +3120,8 @@ class MainWindow(QMainWindow):
         self.on_text_command   = None
         self.on_remote_clicked = None   # callable: () -> (url, key) | None
         self.on_interrupt      = None   # callable: () -> None — stop JARVIS mid-speech
+        self.on_headphones_toggle = None  # callable: () -> None — toggle 🎧 mode
+        self.on_internet_toggle   = None  # callable: () -> None — toggle 🌐 tunnel
         self._muted            = False
         self._current_file: str | None = None
         self._remote_overlay: RemoteKeyOverlay | None = None
@@ -3241,6 +3245,8 @@ class MainWindow(QMainWindow):
         self._pcam_frame_sig.connect(self._on_pcam_frame)
         self._pcam_dets_sig.connect(self._on_pcam_dets)
         self._clipboard_sig.connect(self._show_clipboard_panel)
+        self._headphones_sig.connect(self._on_headphones_status)
+        self._internet_sig.connect(self._on_internet_status)
         self._cam_stop = threading.Event()
         self._feed_mode = "none"             # none | camera | scan | phonecam — who owns the HUD area
         self._pcam_px   = None               # latest phone live frame (QPixmap)
@@ -4640,6 +4646,22 @@ class MainWindow(QMainWindow):
         remote_btn.clicked.connect(self._open_remote)
         lay.addWidget(remote_btn)
 
+        # ── Internet tunnel toggle ───────────────────────────────────────────
+        self._internet_btn = QPushButton("🌐  INTERNET ACCESS: OFF")
+        self._internet_btn.setFixedHeight(28)
+        self._internet_btn.setFont(QFont("Courier New", 7))
+        self._internet_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._internet_btn.clicked.connect(self._toggle_internet)
+        lay.addWidget(self._internet_btn)
+
+        # ── Headphones mode toggle ───────────────────────────────────────────
+        self._headphones_btn = QPushButton("🎧  HEADPHONES MODE: OFF")
+        self._headphones_btn.setFixedHeight(28)
+        self._headphones_btn.setFont(QFont("Courier New", 7))
+        self._headphones_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._headphones_btn.clicked.connect(self._toggle_headphones)
+        lay.addWidget(self._headphones_btn)
+
         holo_pc_btn = QPushButton("◈  HOLO LAB / PC MONITOR")
         holo_pc_btn.setFixedHeight(32)
         holo_pc_btn.setFont(QFont("Courier New", 8, QFont.Weight.Bold))
@@ -5287,6 +5309,100 @@ class MainWindow(QMainWindow):
                 QPushButton:hover {{ color: {C.TEXT}; border: 1px solid {C.BORDER_B}; }}
             """)
 
+    # ── Internet tunnel (🌐) ─────────────────────────────────────────────
+    def _toggle_internet(self):
+        """Ask the assistant to toggle the internet tunnel."""
+        if self.on_internet_toggle:
+            self.on_internet_toggle()
+
+    def _on_internet_status(self, status: dict):
+        """Slot — update the 🌐 button from any thread (via signal)."""
+        self._update_internet_btn(status or {})
+
+    def _update_internet_btn(self, status: dict):
+        if not hasattr(self, '_internet_btn'):
+            return
+        active = bool(status.get("active", False))
+        url    = str(status.get("url") or "").strip()
+        if active and url:
+            self._internet_btn.setText(f"🌐  INTERNET ACCESS: ON — {url}")
+            self._internet_btn.setStyleSheet(f"""
+                QPushButton {{
+                    background: #001a08; color: {C.GREEN};
+                    border: 1px solid {C.GREEN_D}; border-radius: 3px;
+                    text-align: left; padding: 0 8px;
+                }}
+                QPushButton:hover {{ background: #002010; }}
+            """)
+        elif active:
+            self._internet_btn.setText("🌐  INTERNET ACCESS: STARTING…")
+            self._internet_btn.setStyleSheet(f"""
+                QPushButton {{
+                    background: #2a1a00; color: {C.ACC};
+                    border: 1px solid {C.ACC}; border-radius: 3px;
+                    text-align: left; padding: 0 8px;
+                }}
+                QPushButton:hover {{ background: #3a2500; }}
+            """)
+        else:
+            self._internet_btn.setText("🌐  INTERNET ACCESS: OFF")
+            self._internet_btn.setStyleSheet(f"""
+                QPushButton {{
+                    background: {C.PANEL2}; color: {C.TEXT_DIM};
+                    border: 1px solid {C.BORDER}; border-radius: 3px;
+                    text-align: left; padding: 0 8px;
+                }}
+                QPushButton:hover {{ color: {C.TEXT}; border: 1px solid {C.BORDER_B}; }}
+            """)
+
+    # ── Headphones mode (🎧) ─────────────────────────────────────────────
+    def _toggle_headphones(self):
+        """Ask the assistant to toggle headphone mode (work runs off-thread)."""
+        if self.on_headphones_toggle:
+            self.on_headphones_toggle()
+
+    def _on_headphones_status(self, status: dict):
+        """Slot — update the 🎧 button from any thread (via signal)."""
+        self._update_headphones_btn(status or {})
+
+    def _update_headphones_btn(self, status: dict):
+        if not hasattr(self, '_headphones_btn'):
+            return
+        enabled   = bool(status.get("enabled", False))
+        connected = bool(status.get("connected", False))
+        name      = str(status.get("name") or "").strip()
+        if enabled and connected:
+            label = f"🎧  HEADPHONES MODE: ON — {name}" if name else "🎧  HEADPHONES MODE: ON"
+            self._headphones_btn.setText(label)
+            self._headphones_btn.setStyleSheet(f"""
+                QPushButton {{
+                    background: #140a2a; color: #c4b5fd;
+                    border: 1px solid {C.PRI_DIM}; border-radius: 3px;
+                    text-align: left; padding: 0 8px;
+                }}
+                QPushButton:hover {{ background: #1e1040; }}
+            """)
+        elif enabled:
+            self._headphones_btn.setText("🎧  HEADPHONES MODE: ON — no BT headphones")
+            self._headphones_btn.setStyleSheet(f"""
+                QPushButton {{
+                    background: #2a1a00; color: {C.ACC};
+                    border: 1px solid {C.ACC}; border-radius: 3px;
+                    text-align: left; padding: 0 8px;
+                }}
+                QPushButton:hover {{ background: #3a2500; }}
+            """)
+        else:
+            self._headphones_btn.setText("🎧  HEADPHONES MODE: OFF")
+            self._headphones_btn.setStyleSheet(f"""
+                QPushButton {{
+                    background: {C.PANEL2}; color: {C.TEXT_DIM};
+                    border: 1px solid {C.BORDER}; border-radius: 3px;
+                    text-align: left; padding: 0 8px;
+                }}
+                QPushButton:hover {{ color: {C.TEXT}; border: 1px solid {C.BORDER_B}; }}
+            """)
+
     # ── Europe Satellite + AI Enhance ─────────────────────────────────────
     def _toggle_europe_ai(self):
         cfg = _read_full_config()
@@ -5575,6 +5691,22 @@ class JarvisUI:
     @on_interrupt.setter
     def on_interrupt(self, cb):
         self._win.on_interrupt = cb
+
+    @property
+    def on_headphones_toggle(self):
+        return self._win.on_headphones_toggle
+
+    @on_headphones_toggle.setter
+    def on_headphones_toggle(self, cb):
+        self._win.on_headphones_toggle = cb
+
+    def update_headphones_btn(self, status: dict):
+        """Thread-safe: refresh the 🎧 mode button from any thread."""
+        self._win._headphones_sig.emit(status or {})
+
+    def update_internet_btn(self, status: dict):
+        """Thread-safe: refresh the 🌐 internet-tunnel button."""
+        self._win._internet_sig.emit(status or {})
 
     def notify_phone_connected(self) -> None:
         self._win.notify_phone_connected()

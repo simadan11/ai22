@@ -2,8 +2,17 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>JARVIS Dashboard</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <title>EDIT — Remote Assistant</title>
+  <meta name="description" content="EDIT Remote Dashboard — голосовой ассистент, режим наушников, EDITH-камера">
+  <meta name="theme-color" content="#00d4ff">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="EDIT">
+  <link rel="manifest" href="/manifest.webmanifest">
+  <link rel="apple-touch-icon" href="/static/icons/icon-192.png">
+  <link rel="icon" type="image/png" href="/static/icons/icon-192.png">
   <script src="/static/crypto.js"></script>
   <style>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
@@ -50,12 +59,17 @@
     .enc-badge.on  { display: block; background: rgba(34,197,94,0.1); border: 1px solid rgba(34,197,94,0.25); color: var(--green); }
     .enc-badge.off { display: block; background: rgba(255,100,100,0.08); border: 1px solid rgba(255,100,100,0.2); color: #f87171; }
     .url { font-size: 10px; font-family: monospace; color: var(--muted); padding: 4px 9px; background: var(--surface); border: 1px solid var(--border); border-radius: 6px; }
-    #spk-btn, #dev-btn, #holo-btn {
+    #spk-btn, #dev-btn, #holo-btn, #hp-btn {
       background: var(--surface); border: 1px solid var(--border); color: var(--text);
       padding: 4px 9px; font-size: 13px; border-radius: 6px; cursor: pointer; line-height: 1.25;
     }
-    #spk-btn:active, #dev-btn:active, #holo-btn:active { transform: scale(0.95); }
+    #spk-btn:active, #dev-btn:active, #holo-btn:active, #hp-btn:active, #install-btn:active { transform: scale(0.95); }
     #spk-btn.muted  { opacity: 0.45; }
+    #hp-btn { color: #c4b5fd; border-color: rgba(167,139,250,0.35); }
+    #hp-btn:hover { background: rgba(167,139,250,0.14); border-color: #a78bfa; }
+    #hp-btn.on  { color: #4ade80; border-color: rgba(74,222,128,0.5); background: rgba(74,222,128,0.08); }
+    #install-btn { color: #86efac; border-color: rgba(34,197,94,0.4); font-size: 15px; padding: 2px 10px; }
+    #install-btn:hover { background: rgba(34,197,94,0.14); border-color: #22c55e; }
     #dev-btn #dev-count { font-size: 10px; font-weight: 700; color: var(--green); }
     #holo-btn { color: #67e8f9; border-color: rgba(34,211,238,0.3); }
     #holo-btn:hover { background: rgba(34,211,238,0.12); border-color: #22d3ee; }
@@ -530,6 +544,8 @@
     <div class="spacer"></div>
     <button id="holo-btn" onclick="openHoloLab()" title="Holo Lab — wearable prototype studio">◈ HOLO</button>
     <button id="dev-btn" onclick="toggleDevPanel()" title="Connected devices hub">🛰 <span id="dev-count">0</span></button>
+    <button id="hp-btn" onclick="toggleHeadphones()" title="Headphones mode — Bluetooth headphones connected to THIS phone; the headphone button = 'EDIT, listen now'">🎧</button>
+    <button id="install-btn" onclick="installApp()" title="Установить EDIT на телефон как приложение" style="display:none">⤓</button>
     <button id="spk-btn" onclick="toggleSpk()" title="JARVIS voice on this device">🔊</button>
     <div class="url">__IP__:__PORT__</div>
   </header>
@@ -723,6 +739,15 @@
       if (m.type === 'sys')           sys(m.text);
       if (m.type === 'file_received') _onFileReceived(m);
       if (m.type === 'devices')       _setDevCount(m.count);
+      if (m.type === 'dev_id')        { _myDevId = m.id; _maybeRestoreHp(); }
+      if (m.type === 'headphones') {
+        if (m.action === 'listen') sys('🎧 Headphone button pressed — EDIT listening…');
+        if ('sink' in m) _applySink(m.sink);
+      }
+      if (m.type === 'tts') {
+        if (m.cancel) { _stopTts(); _stopSpk(); }
+        else if (m.text) _speakTts(m.text);
+      }
       if (m.type === 'vision_status') sys(m.state === 'error' ? m.text : 'Phone camera: ' + m.state + '…');
       if (m.type === 'holo_project' && m.project) {
         const chip = document.getElementById('holo-project-chip');
@@ -945,6 +970,262 @@
       toast(_spkOn ? 'JARVIS voice: ON' : 'JARVIS voice: OFF');
     }
 
+    // ── Headphones mode (🎧) — Bluetooth headphones connected to THIS phone ──
+    // When ON, the headphone's own multifunction button (AVRCP play/pause)
+    // becomes push-to-listen: EDIT stops talking on the PC and hears you
+    // through this phone's microphone (= the headset mic).  EDIT's voice
+    // already plays on the phone's default output — the headphones.
+    let _hpOn      = false;
+    let _hpAudio   = null;   // silent loop keeps this tab the active media session
+    let _hpMicOwned = false; // true when the mode opened the mic itself
+    let _myDevId   = null;   // this tab's id, assigned by the server on /ws connect
+
+    // ── PWA install — "add EDIT to the home screen" as an app ─────────────
+    let _deferredPrompt = null;
+    window.addEventListener('beforeinstallprompt', (e) => {
+      e.preventDefault();
+      _deferredPrompt = e;
+      const b = document.getElementById('install-btn');
+      if (b) b.style.display = '';
+    });
+    window.addEventListener('appinstalled', () => {
+      const b = document.getElementById('install-btn');
+      if (b) b.style.display = 'none';
+      toast('EDIT установлен на телефон 🎉');
+    });
+    async function installApp() {
+      if (_deferredPrompt) {
+        _deferredPrompt.prompt();
+        await _deferredPrompt.userChoice.catch(() => {});
+        _deferredPrompt = null;
+      } else {
+        toast('Откройте ⋮ → «Добавить на главный экран»');
+      }
+    }
+    // Register the service worker (installed app works offline-ish + standalone)
+    if ('serviceWorker' in navigator) {
+      window.addEventListener('load', () => {
+        navigator.serviceWorker.register('/sw.js').catch(() => {});
+      });
+    }
+
+    // ── Wake Lock — keep the screen ON while Headphones Mode / mic is live ──
+    // When Android locks the screen the browser suspends WebAudio + the mic,
+    // so the sound dies.  The screen wake lock prevents the lock entirely.
+    let _wl = null;
+    async function _requestWakeLock() {
+      if (_wl) return;
+      try {
+        if (navigator.wakeLock && navigator.wakeLock.request) {
+          _wl = await navigator.wakeLock.request('screen');
+          _wl.addEventListener('release', () => { _wl = null; });
+        }
+      } catch (_) {}
+    }
+    function _releaseWakeLock() {
+      try { if (_wl) { _wl.release(); } } catch (_) {}
+      _wl = null;
+    }
+    // Re-evaluate: hold the lock while headphones mode is on OR the phone mic
+    // is streaming; drop it otherwise.
+    function _refreshWakeLock() {
+      if (_hpOn || _voiceWs) _requestWakeLock();
+      else _releaseWakeLock();
+    }
+
+    function _setPhoneHpMode(on) {
+      _authFetch('/api/headphones/phone-mode', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ enabled: on, dev_id: _myDevId })
+      }).catch(() => {});
+    }
+
+    async function toggleHeadphones() {
+      const next = !_hpOn;
+      if (next) {
+        if (!_startHpMode()) {
+          sys('🎧 Headphones mode: this browser cannot catch the headphone button (needs Chrome/Android mediaSession).');
+          return;
+        }
+        _hpOn = true;
+        localStorage.setItem('hp_mode', '1');
+        // Mute the PC speaker and make THIS tab the only audio sink —
+        // EDIT's voice comes only through the phone (= the headphones),
+        // never duplicated on a second tab/device.
+        _setPhoneHpMode(true);
+        _refreshWakeLock();   // keep the screen on so the sound keeps working
+        sys('🎧 Headphones mode ON — EDIT speaks ONLY in your headphones, PC speakers muted. Tap your Gelius (single tap) to talk');
+        // Ask for mic permission now (inside the tap gesture) and open the
+        // headset-mic channel — so EDIT already hears you and the headphone
+        // button can restart the stream later without another permission tap.
+        if (!_voiceWs) { doMic(); _hpMicOwned = true; }
+      } else {
+        _stopHpMode();
+        if (_hpMicOwned) {
+          if (_voiceWs) _stopVoice();
+          _hpMicOwned = false;
+        }
+        _hpOn = false;
+        localStorage.setItem('hp_mode', '0');
+        _setPhoneHpMode(false);
+        _refreshWakeLock();
+        sys('🎧 Headphones mode OFF — PC audio restored');
+      }
+      const b = document.getElementById('hp-btn');
+      if (b) b.classList.toggle('on', _hpOn);
+    }
+
+    function _startHpMode() {
+      let ok = false;
+      if ('mediaSession' in navigator) {
+        try {
+          navigator.mediaSession.metadata = new MediaMetadata({
+            title: 'EDIT — Headphones Mode',
+            artist: 'MARK Remote',
+          });
+          const press = () => _hpButtonPressed();
+          for (const a of ['playpause', 'play', 'pause', 'previoustrack', 'nexttrack']) {
+            try { navigator.mediaSession.setActionHandler(a, press); ok = true; } catch (_) {}
+          }
+        } catch (_) {}
+      }
+      // Keep this tab the "active media session" so AVRCP presses from the
+      // headphones reach the page — a silent looping audio element.
+      try {
+        if (!_hpAudio) {
+          _hpAudio = new Audio(_silentWavUrl());
+          _hpAudio.loop = true;
+          _hpAudio.volume = 0;
+          _hpAudio.muted = true;   // guaranteed silence (some Androids ignore volume=0 over BT)
+          _hpAudio.play().catch(() => {});
+        }
+      } catch (_) {}
+      return ok;
+    }
+
+    function _stopHpMode() {
+      try {
+        for (const a of ['playpause', 'play', 'pause', 'previoustrack', 'nexttrack']) {
+          try { navigator.mediaSession.setActionHandler(a, null); } catch (_) {}
+        }
+        navigator.mediaSession.metadata = null;
+      } catch (_) {}
+      try { if (_hpAudio) { _hpAudio.pause(); _hpAudio = null; } } catch (_) {}
+    }
+
+    function _silentWavUrl() {
+      // tiny silent WAV built in JS (8 kHz mono 16-bit, 0.1 s of zeros)
+      const sr = 8000, n = sr / 10;
+      const buf = new ArrayBuffer(44 + n * 2);
+      const dv = new DataView(buf);
+      const ascii = (o, s) => { for (let i = 0; i < s.length; i++) dv.setUint8(o + i, s.charCodeAt(i)); };
+      ascii(0, 'RIFF'); dv.setUint32(4, 36 + n * 2, true); ascii(8, 'WAVE');
+      ascii(12, 'fmt '); dv.setUint32(16, 16, true); dv.setUint16(20, 1, true);
+      dv.setUint16(22, 1, true); dv.setUint32(24, sr, true); dv.setUint32(28, sr * 2, true);
+      dv.setUint16(32, 2, true); dv.setUint16(34, 16, true);
+      ascii(36, 'data'); dv.setUint32(40, n * 2, true);
+      return URL.createObjectURL(new Blob([buf], { type: 'audio/wav' }));
+    }
+
+    function _hpButtonPressed() {
+      sys('🎧 Headphone button — EDIT listening…');
+      // 0) stop the phone's TTS / streamed Jarvis voice instantly
+      _stopTts();
+      _stopSpk();
+      // 1) EDIT stops talking on the PC and opens the channel
+      _authFetch('/api/headphones/button', { method: 'POST' }).catch(() => {});
+      // 2) stream this phone's mic (= headset mic) so EDIT hears the user
+      if (!_voiceWs) doMic();
+    }
+
+    // Only the audio-sink tab (the one running Headphones Mode) plays EDIT's
+    // voice — every other tab/device mutes its own speaker so the user never
+    // hears two voices, even if a second tab has the dashboard open.
+    let _hpSinkId = null;
+    function _applySink(id) {
+      _hpSinkId = id || null;
+      _spkOn = !(_hpSinkId && _hpSinkId !== _myDevId);
+      const b = document.getElementById('spk-btn');
+      if (b) {
+        b.textContent = _spkOn ? '🔊' : '🔇';
+        b.classList.toggle('muted', !_spkOn);
+      }
+    }
+
+    // ── TTS voice module — the phone's own speech synthesis ────────────────
+    // EDIT's replies arrive as TEXT; this phone's system TTS module voices
+    // them into the headphones.  The AI's audio stream is not used at all,
+    // so there is exactly ONE voice.
+    let _ttsVoice = null;
+    if (window.speechSynthesis) {
+      const _pickVoice = () => {
+        try {
+          const vs = speechSynthesis.getVoices();
+          for (const v of vs) {
+            if (/^(uk|ru|be|bg)-/i.test(v.lang)) { _ttsVoice = v; break; }
+          }
+        } catch (_) {}
+      };
+      _pickVoice();
+      try { speechSynthesis.onvoiceschanged = _pickVoice; } catch (_) {}
+    }
+
+    function _speakTts(text) {
+      if (!window.speechSynthesis || !_spkOn) return;   // non-sink tabs stay silent
+      try {
+        const u = new SpeechSynthesisUtterance(text);
+        if (_ttsVoice) u.voice = _ttsVoice;
+        u.rate  = 1.0;
+        u.pitch = 1.0;
+        speechSynthesis.speak(u);
+      } catch (_) {}
+    }
+
+    function _stopTts() {
+      if (window.speechSynthesis) {
+        try { speechSynthesis.cancel(); } catch (_) {}
+      }
+    }
+
+    // Stop the streamed voice (Jarvis Voice Module PCM) immediately.
+    function _stopSpk() {
+      _spkNext = 0;
+      if (_spkCtx) { try { _spkCtx.close(); } catch (_) {} _spkCtx = null; }
+    }
+
+    // restore the mode after a page reload (the PC side keeps its mute flag).
+    // Runs once we know this tab's dev_id, so the server can make THIS tab
+    // the audio sink again.
+    function _maybeRestoreHp() {
+      if (localStorage.getItem('hp_mode') !== '1' || _hpOn || !_myDevId) return;
+      if (_startHpMode()) {
+        _hpOn = true;
+        const b = document.getElementById('hp-btn');
+        if (b) b.classList.toggle('on', true);
+        _setPhoneHpMode(true);
+        _refreshWakeLock();
+        sys('🎧 Headphones mode restored — tap your Gelius to talk to EDIT');
+      } else {
+        localStorage.setItem('hp_mode', '0');
+        _setPhoneHpMode(false);
+      }
+    }
+
+    // ── Keep the session alive when the app comes back to the foreground ──
+    // Android drops the screen wake lock and suspends WebAudio when the page
+    // is hidden, so re-request the lock and resume the audio contexts as soon
+    // as the user returns.
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState !== 'visible') return;
+      if (_hpOn || _voiceWs) _requestWakeLock();
+      try { if (_spkCtx && _spkCtx.state === 'suspended') _spkCtx.resume(); } catch (_) {}
+      try { if (_hpAudio) _hpAudio.play().catch(() => {}); } catch (_) {}
+    });
+    window.addEventListener('focus', () => {
+      if (_hpOn || _voiceWs) _requestWakeLock();
+    });
+
     function _playSpk(buf) {
       if (!_spkOn) return;
       try {
@@ -1141,6 +1422,7 @@
           let _pbuf = [], _plen = 0;
           nd.port.onmessage = e => {
             if (_spkActive()) return;   // don't echo JARVIS's own voice back to him
+            if (window.speechSynthesis && speechSynthesis.speaking) return;  // don't echo the TTS voice
             const chunk = new Int16Array(_f32toPcm16(e.data, rate));
             _pbuf.push(chunk); _plen += chunk.length;
             if (_plen >= 1024) {
@@ -1153,13 +1435,17 @@
           src.connect(nd);
           _audioNd = nd;
         } catch (_) {
-          // ScriptProcessor fallback (deprecated, still works everywhere)
+          // ScriptProcessor fallback (deprecated, still works everywhere).
+          // IMPORTANT: do NOT connect to ctx.destination — that would play
+          // the mic into the speaker/earbuds and the user would hear EDIT's
+          // own voice twice (direct + echoed through the headset mic).
           const sp = ctx.createScriptProcessor(4096, 1, 1);
           sp.onaudioprocess = e => {
             if (_spkActive()) return;   // don't echo JARVIS's own voice back to him
+            if (window.speechSynthesis && speechSynthesis.speaking) return;  // don't echo the TTS voice
             if (ws.readyState === 1) ws.send(_f32toPcm16(e.inputBuffer.getChannelData(0), rate));
           };
-          src.connect(sp); sp.connect(ctx.destination);
+          src.connect(sp);
           _audioNd = sp;
         }
 
@@ -1176,6 +1462,7 @@
       _voiceWs  = ws;
       _audioCtx = ctx;
       _micStm   = stream;
+      _refreshWakeLock();   // screen stays on while the mic is live
     }
 
     function _stopVoice() {
@@ -1187,6 +1474,7 @@
         if (w.readyState < 2) w.close();
       }
       _micIdle();
+      _refreshWakeLock();
     }
 
     // ── Phone Camera — EDITH Vision ───────────────────────────────────────────

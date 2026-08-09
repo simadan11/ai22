@@ -561,6 +561,11 @@ class DashboardServer:
         self._wake_callback               = None
         self._connect_callback            = None
         self._holo_callback               = None
+        self._headphones_callback         = None   # async (enabled|None) -> status dict
+        self._headphones_button_callback  = None   # async () -> None — phone headphone button
+        self._phone_headphones_callback   = None   # async (bool) -> dict — phone Headphones Mode on/off
+        self._audio_sink: str | None      = None   # dev_id of the phone running Headphones Mode
+        self._loop                        = None   # asyncio loop (set in serve())
         self._pending_keys: dict[str, float] = {}
         self._device_sessions: dict[str, dict] = {}  # device_token → {session_key}
         self._phone_audio_queue: asyncio.Queue    = asyncio.Queue(maxsize=200)
@@ -626,6 +631,20 @@ class DashboardServer:
     def set_holo_callback(self, fn) -> None:
         """Called when a dashboard or voice command creates a Holo project."""
         self._holo_callback = fn
+
+    def set_headphones_callback(self, fn) -> None:
+        """fn is async: (enabled: bool | None) -> dict (headphone-mode status)."""
+        self._headphones_callback = fn
+
+    def set_headphones_button_callback(self, fn) -> None:
+        """fn is async: () -> None — fired when the phone-side headphone
+        button is pressed (EDIT should stop talking and listen)."""
+        self._headphones_button_callback = fn
+
+    def set_phone_headphones_callback(self, fn) -> None:
+        """fn is async: (enabled: bool) -> dict — a phone turned its
+        Headphones Mode on/off (PC speaker should mute while ON)."""
+        self._phone_headphones_callback = fn
 
     def create_holo_project(
         self,
@@ -739,18 +758,73 @@ class DashboardServer:
 
     def feed_audio(self, chunk: bytes) -> None:
         """main.py drops every JARVIS speech PCM slice here (24 kHz int16 mono).
-        Non-blocking: a slow phone must never stall the assistant's voice."""
+        Non-blocking: a slow phone must never stall the assistant's voice.
+        Thread-safe: called from the Jarvis Voice Module's worker thread too."""
         try:
-            self._audio_out_queue.put_nowait(chunk)
+            loop = self._loop
+            if loop is not None and loop.is_running():
+                loop.call_soon_threadsafe(
+                    self._audio_out_queue.put_nowait, chunk
+                )
+            else:
+                self._audio_out_queue.put_nowait(chunk)
         except asyncio.QueueFull:
             pass  # phone lags more than ~8 s behind — drop rather than back up
 
+    def clear_audio(self) -> None:
+        """Drop buffered voice PCM (interrupt / headphone button). Thread-safe."""
+        try:
+            loop = self._loop
+            if loop is not None and loop.is_running():
+                loop.call_soon_threadsafe(self._drain_audio)
+            else:
+                self._drain_audio()
+        except Exception:
+            pass
+
+    def _drain_audio(self) -> None:
+        while True:
+            try:
+                self._audio_out_queue.get_nowait()
+            except asyncio.QueueEmpty:
+                break
+
+    async def send_tts(self, text: str) -> bool:
+        """Deliver reply text to the phone that runs Headphones Mode
+        (the single audio sink), which voices it with its own speech
+        synthesis.  Returns False when there is no active sink — the caller
+        then falls back to the PC TTS engine.
+        """
+        sink = self._audio_sink
+        if sink and sink in self._client_info:
+            try:
+                await self._client_info[sink]["ws"].send_json(
+                    {"type": "tts", "text": text}
+                )
+                return True
+            except Exception:
+                pass
+        return False
+
     async def _audio_broadcast_loop(self) -> None:
-        """Fan out JARVIS voice PCM to every connected phone (binary WS frames)."""
+        """Fan out JARVIS voice PCM to connected phones (binary WS frames).
+
+        While a phone runs Headphones Mode, its WS connection is the audio
+        sink and ONLY it receives the voice — otherwise every connected
+        tab/device plays it and the user hears two voices in the earbuds.
+        """
         while True:
             chunk = await self._audio_out_queue.get()
             if not self._clients:
                 continue
+            sink = self._audio_sink
+            if sink and sink in self._client_info:
+                ws = self._client_info[sink].get("ws")
+                try:
+                    await ws.send_bytes(chunk)
+                    continue
+                except Exception:
+                    self._audio_sink = None   # sink tab closed → back to fan-out
             dead: set[WebSocket] = set()
             for ws in list(self._clients):
                 try:
@@ -833,6 +907,31 @@ class DashboardServer:
                                     media_type="application/javascript")
             from fastapi.responses import RedirectResponse
             return RedirectResponse(_CRYPTOJS_CDN)
+
+        # ── PWA — installable phone app ────────────────────────────────────
+        @app.get("/manifest.webmanifest")
+        async def pwa_manifest():
+            try:
+                data = (STATIC_DIR / "manifest.webmanifest").read_text(encoding="utf-8")
+            except Exception:
+                return JSONResponse({}, media_type="application/manifest+json")
+            return JSONResponse(
+                json.loads(data), media_type="application/manifest+json"
+            )
+
+        @app.get("/sw.js")
+        async def service_worker():
+            return FileResponse(
+                str(STATIC_DIR / "sw.js"), media_type="application/javascript"
+            )
+
+        @app.get("/static/icons/{name}")
+        async def pwa_icon(name: str):
+            safe = re.sub(r"[^a-zA-Z0-9._-]", "", name)
+            path = STATIC_DIR / "icons" / safe
+            if path.exists() and path.is_file():
+                return FileResponse(str(path))
+            return JSONResponse({"error": "Not found"}, status_code=404)
 
         @app.get("/login", response_class=HTMLResponse)
         async def login_page():
@@ -994,6 +1093,103 @@ class DashboardServer:
                 return JSONResponse({"error": "Unauthorized"}, status_code=401)
             if self._wake_callback:
                 self._wake_callback()
+            return JSONResponse({"ok": True})
+
+        # ── Headphones mode (🎧) ──────────────────────────────────────────────
+        # The Remote Dashboard button toggles EDIT's headphone mode on the PC:
+        # voice output → Bluetooth headphones, mic ← headset mic, and the
+        # headphone's own button becomes "EDIT, listen now".
+
+        @app.get("/api/headphones")
+        async def headphones_status_ep(req: Request):
+            if not _auth(req):
+                return JSONResponse({"error": "Unauthorized"}, status_code=401)
+            if not self._headphones_callback:
+                return JSONResponse({"ok": False, "error": "PC audio unavailable"})
+            try:
+                status = await self._headphones_callback(None)
+            except Exception as e:
+                return JSONResponse({"ok": False, "error": str(e)[:200]}, status_code=502)
+            return JSONResponse({"ok": True, "status": status})
+
+        @app.post("/api/headphones")
+        async def headphones_set_ep(req: Request):
+            if not _auth(req):
+                return JSONResponse({"error": "Unauthorized"}, status_code=401)
+            if not self._headphones_callback:
+                return JSONResponse({"ok": False, "error": "PC audio unavailable"})
+            try:
+                body = await req.json()
+            except Exception:
+                body = {}
+            enabled = bool(body.get("enabled"))
+            try:
+                status = await self._headphones_callback(enabled)
+            except Exception as e:
+                return JSONResponse({"ok": False, "error": str(e)[:200]}, status_code=502)
+            # the callback itself broadcasts the fresh status to every client
+            return JSONResponse({"ok": True, "status": status})
+
+        @app.post("/api/headphones/phone-mode")
+        async def headphones_phone_mode_ep(req: Request):
+            """Phone Headphones Mode on/off → mute/restore the PC speaker.
+
+            While a phone runs Headphones Mode, EDIT's voice plays ONLY on the
+            phone (into the Bluetooth headphones) — the PC must not speak too,
+            otherwise the user hears two voices.
+            """
+            if not _auth(req):
+                return JSONResponse({"error": "Unauthorized"}, status_code=401)
+            if not self._phone_headphones_callback:
+                return JSONResponse({"ok": False, "error": "PC audio unavailable"})
+            try:
+                body = await req.json()
+            except Exception:
+                body = {}
+            enabled = bool(body.get("enabled"))
+
+            # Single audio sink: while Headphones Mode is ON, only THIS client
+            # (the phone with the earbuds) receives EDIT's voice — the others
+            # stay silent, otherwise the user hears two voices.
+            tok    = req.headers.get("authorization", "").removeprefix("Bearer ").strip()
+            dev_id = str((body or {}).get("dev_id") or "").strip()
+            if enabled:
+                if dev_id and dev_id in self._client_info:
+                    self._audio_sink = dev_id
+                else:
+                    # Fallback: newest connected client with the same token
+                    for dev_id in reversed(list(self._client_info)):
+                        if self._client_info[dev_id].get("token") == tok:
+                            self._audio_sink = dev_id
+                            break
+            else:
+                self._audio_sink = None
+
+            try:
+                status = await self._phone_headphones_callback(enabled)
+            except Exception as e:
+                return JSONResponse({"ok": False, "error": str(e)[:200]}, status_code=502)
+            # Tell every tab which one is the audio sink, so non-sink tabs
+            # mute their own speaker (belt & suspenders against double voice).
+            await self.broadcast({"type": "headphones", "sink": self._audio_sink})
+            return JSONResponse({"ok": True, "status": status})
+
+        @app.post("/api/headphones/button")
+        async def headphones_button_ep(req: Request):
+            """Phone-side headphone button (AVRCP play/pause) → EDIT listens.
+
+            The phone catches the headphone's button press via the browser
+            mediaSession API and forwards it here so EDIT stops talking and
+            the phone-mic channel (headset mic) is heard on the PC.
+            """
+            if not _auth(req):
+                return JSONResponse({"error": "Unauthorized"}, status_code=401)
+            if not self._headphones_button_callback:
+                return JSONResponse({"ok": False, "error": "PC audio unavailable"})
+            try:
+                await self._headphones_button_callback()
+            except Exception as e:
+                return JSONResponse({"ok": False, "error": str(e)[:200]}, status_code=502)
             return JSONResponse({"ok": True})
 
         # ── Phone camera — EDITH vision ───────────────────────────────────────
@@ -1292,7 +1488,15 @@ class DashboardServer:
                 "ip":   ip,
                 "name": _device_name(websocket.headers.get("user-agent", "")),
                 "since": time.time(),
+                "token": tok,
             }
+            # Tell this client its own dev_id so it can self-identify as the
+            # audio sink when it enables Headphones Mode (distinguishes tabs
+            # that share the same auth token).
+            try:
+                await websocket.send_json({"type": "dev_id", "id": dev_id})
+            except Exception:
+                pass
             asyncio.create_task(self.broadcast(
                 {"type": "devices", "count": len(self._clients)}
             ))
@@ -1316,6 +1520,8 @@ class DashboardServer:
             finally:
                 self._clients.discard(websocket)
                 self._client_info.pop(dev_id, None)
+                if self._audio_sink == dev_id:
+                    self._audio_sink = None   # the headphones-mode tab closed
                 asyncio.create_task(self.broadcast(
                     {"type": "devices", "count": len(self._clients)}
                 ))
@@ -1344,6 +1550,7 @@ class DashboardServer:
             print("[Dashboard] Run:  pip install fastapi 'uvicorn[standard]' cryptography")
             return
 
+        self._loop = asyncio.get_event_loop()   # for thread-safe feed_audio
         # Firewall setup runs in a thread — uvicorn starts immediately,
         # no waiting for UAC dialogs or subprocess timeouts.
         asyncio.get_event_loop().run_in_executor(None, _ensure_network_access, PORT)

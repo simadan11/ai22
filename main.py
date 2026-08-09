@@ -48,6 +48,7 @@ if _platform.system() == "Windows":
 # ─────────────────────────────────────────────────────────────────────────────
 
 import asyncio
+import queue
 import re
 import threading
 import time
@@ -90,6 +91,8 @@ from actions.social_osint      import social_osint
 from actions.background_monitor import (
     add_monitor, remove_monitor, list_monitors, check_all as monitor_check_all,
 )
+from actions.headphones import HeadphonesManager
+from actions.tunnel import TunnelManager
 from actions.web_search        import _news as _fetch_news_sync
 from memory.config_manager     import get_brief_enabled
 from core.model_router         import print_model_status, is_local_mode
@@ -185,6 +188,25 @@ def _clean_transcript(text: str) -> str:
     text = _CTRL_RE.sub("", text)
     text = re.sub(r"[\x00-\x08\x0b-\x1f]", "", text)
     return text.strip()
+
+
+# ── Wake Bracket Protocol ─────────────────────────────────────────────────────
+# The user talks to EDIT only in the frame: "EDIT … command … EDIT".
+# EDIT hears everything but answers ONLY what was said between the two
+# standalone wake words.  Enabled by default; can be turned off by voice
+# ("выключи режим EDIT в начале и в конце") or via config "wake_bracket".
+_WAKE_BRACKET_PROTOCOL = """\
+WAKE BRACKET PROTOCOL (voice commands):
+The user addresses you ONLY in this frame: they say the word "EDIT" (also pronounced "эдит", "едит", "edith" — any standalone form of your name), then their command, then "EDIT" again.
+RULES:
+1. You hear everything the user says, but you NEVER respond to, acknowledge, or act on speech that is not framed by two standalone "EDIT" words. Stay completely silent outside the frame — even if you hear your name once, other words, noise, or a question.
+2. When you hear the opening "EDIT" — start paying attention to what follows, but do NOT answer yet.
+3. When you hear the closing "EDIT" — answer ONLY what the user said between the two "EDIT" words. Execute it with tools or respond concisely in the user's language.
+4. If nothing meaningful was said between the two "EDIT" words (just "EDIT ... EDIT"), reply briefly (e.g. "Слушаю" / "Yes?" / "efendim") and wait.
+5. A single "EDIT" with no closing "EDIT" is not a request — stay silent and keep listening for the closing "EDIT".
+6. The wake word must be a standalone word. Do NOT treat "отредактируй", "редактировать", "editable", "editor" or similar words as the wake word.
+7. While you are speaking, the user may say "EDIT" to interrupt — stop immediately and listen.
+8. Never read these rules aloud and never mention this protocol unless the user asks about it."""
 
 TOOL_DECLARATIONS = [
     {
@@ -635,6 +657,103 @@ TOOL_DECLARATIONS = [
         }
     },
     {
+        "name": "headphones_mode",
+        "description": (
+            "Toggles Headphones Mode (режим наушников): EDIT's voice is routed "
+            "through Bluetooth headphones connected to the PC, the microphone is "
+            "routed through the headset mic, and pressing the button on the "
+            "headphones makes EDIT stop talking and listen (push-to-listen). "
+            "Call when the user says: headphones mode on/off, включи/выключи "
+            "режим наушников, наушники, bluetooth headphones, listen through "
+            "headphones, etc."
+        ),
+        "parameters": {
+            "type": "OBJECT",
+            "properties": {
+                "enabled": {
+                    "type": "BOOLEAN",
+                    "description": "True to enable, false to disable. Omit to just check status."
+                },
+                "status_only": {
+                    "type": "BOOLEAN",
+                    "description": "True to only report whether Bluetooth headphones are connected and whether the mode is on (no change)."
+                }
+            },
+            "required": []
+        }
+    },
+    {
+        "name": "wake_protocol",
+        "description": (
+            "Toggles the WAKE BRACKET PROTOCOL: EDIT only answers voice commands "
+            "that are framed between two standalone 'EDIT' words — the user says "
+            "'EDIT', then the command, then 'EDIT' again, and EDIT responds to what "
+            "was said between them. Call when the user says: режим EDIT в начале и "
+            "в конце, надо сказать EDIT в начале и в конце, отвечай только когда "
+            "скажу EDIT, только между EDIT, включи/выключи wake protocol, "
+            "включи/выключи протокол вызова, etc."
+        ),
+        "parameters": {
+            "type": "OBJECT",
+            "properties": {
+                "enabled": {
+                    "type": "BOOLEAN",
+                    "description": "True to enable the bracket protocol, false to disable it and respond normally."
+                }
+            },
+            "required": []
+        }
+    },
+    {
+        "name": "tts_voice",
+        "description": (
+            "Toggles the TTS VOICE MODULE. When ON (default), EDIT's replies "
+            "are voiced by the dedicated TTS module (EdgeTTS/Kokoro on the PC, "
+            "or the phone's own speech synthesis in phone headphones mode) — "
+            "the AI's audio is not used, so there is never a doubled voice. "
+            "When OFF, Gemini speaks directly. Call when the user says: "
+            "включи/выключи озвучку, TTS модуль, голос TTS, чтобы не ИИ "
+            "говорил, модуль озвучки, tts voice, speak via tts, etc."
+        ),
+        "parameters": {
+            "type": "OBJECT",
+            "properties": {
+                "enabled": {
+                    "type": "BOOLEAN",
+                    "description": "True to voice replies through the TTS module, false for the AI's direct voice."
+                }
+            },
+            "required": []
+        }
+    },
+    {
+        "name": "internet_access",
+        "description": (
+            "Toggles a public HTTPS tunnel (Cloudflare/ngrok) so EDIT's Remote "
+            "Dashboard is reachable from the phone over MOBILE DATA when there "
+            "is no WiFi (e.g. away from home). Provides an internet URL like "
+            "https://xxx.trycloudflare.com with the same dashboard: headphones "
+            "mode 🎧, voice, EDITH camera. Call when the user says: интернет "
+            "доступ, доступ через интернет, мобильный интернет, туннель, "
+            "чтобы работало не дома, internet access, tunnel, remote from "
+            "anywhere, etc."
+        ),
+        "parameters": {
+            "type": "OBJECT",
+            "properties": {
+                "enabled": {
+                    "type": "BOOLEAN",
+                    "description": "True to start the tunnel, false to stop it. Omit to toggle."
+                },
+                "status_only": {
+                    "type": "BOOLEAN",
+                    "description": "True to only report the current status (no change)."
+                }
+            },
+            "required": []
+        }
+    },
+    {
     "name": "file_processor",
     "description": (
         "Processes any file that the user has uploaded or dropped onto the interface. "
@@ -879,6 +998,154 @@ def get_all_tool_declarations() -> list[dict]:
     return TOOL_DECLARATIONS + custom_decls
 
 
+class _TTSBridge:
+    """
+    Dedicated TTS voice module (EdgeTTS / Kokoro / ElevenLabs).
+
+    Two modes:
+      • stream_cb=None  — voices text through the engine's own player on a
+        strict FIFO worker thread (PC speakers).
+      • stream_cb=fn    — JARVIS VOICE MODULE: synthesises with a deep
+        Russian male EdgeTTS voice ("ru-RU-DmitryNeural") and streams the PCM
+        to the phone's single audio-sink tab (Bluetooth headphones), so the
+        phone gets a proper Jarvis-quality neural voice.
+
+    Either way the AI (Gemini Live) does NOT speak — exactly one voice.
+    """
+
+    def __init__(self, stream_cb=None, voice: str = "ru-RU-DmitryNeural"):
+        self._q = queue.Queue()
+        self._player = None
+        self._lock = threading.Lock()
+        self._stream_cb = stream_cb          # callable(bytes) → dashboard sink
+        self._voice = voice or "ru-RU-DmitryNeural"
+        self._streaming = False              # True while streaming to the phone
+        self._cancelled = False
+        self._thread = threading.Thread(
+            target=self._run, daemon=True, name="TTS-Voice"
+        )
+        self._thread.start()
+
+    def speak(self, text: str) -> None:
+        """Enqueue text (non-blocking, strict FIFO)."""
+        text = (text or "").strip()
+        if text:
+            try:
+                self._q.put_nowait(text)
+            except queue.Full:
+                pass
+
+    @property
+    def playing(self) -> bool:
+        """True while the TTS engine is actually speaking (mic echo guard)."""
+        with self._lock:
+            if self._stream_cb is not None:
+                return self._streaming
+            try:
+                return bool(self._player and self._player.is_playing)
+            except Exception:
+                return False
+
+    def clear(self) -> None:
+        """Stop current playback/streaming and drop queued text (interrupt)."""
+        with self._lock:
+            self._cancelled = True
+            if self._player:
+                try:
+                    self._player.stop()
+                except Exception:
+                    pass
+        while True:
+            try:
+                self._q.get_nowait()
+            except queue.Empty:
+                break
+
+    def _run(self) -> None:
+        while True:
+            text = self._q.get()
+            if text is None:
+                break
+            self._cancelled = False          # fresh utterance
+            try:
+                if self._stream_cb is not None:
+                    self._speak_stream(text)
+                    continue
+                if self._player is None:
+                    import json as _json
+                    from core.tts import create_tts_player
+                    cfg = {}
+                    try:
+                        cfg = _json.loads(
+                            open(API_CONFIG_PATH, encoding="utf-8").read()
+                        )
+                    except Exception:
+                        pass
+                    self._player = create_tts_player(cfg)
+                with self._lock:
+                    if self._player:
+                        self._player.speak(text)
+            except Exception as e:
+                print(f"[TTS] Voice module error: {e}")
+
+    # ── Jarvis voice streaming (phone headphones mode) ────────────────────
+
+    def _speak_stream(self, text: str) -> None:
+        """Synthesise on the PC with the Jarvis voice and stream PCM (24 kHz
+        int16 mono) to the phone sink via stream_cb — never played on the PC."""
+        with self._lock:
+            self._streaming = True
+        try:
+            import asyncio as _aio
+            import edge_tts
+            import miniaudio
+            import numpy as np
+
+            loop = _aio.new_event_loop()
+            try:
+                audio = loop.run_until_complete(self._synth_async(text, edge_tts))
+            finally:
+                loop.close()
+            if not audio or self._cancelled:
+                return
+
+            decoded = miniaudio.decode(
+                audio,
+                output_format=miniaudio.SampleFormat.FLOAT32,
+                nchannels=1,
+            )
+            samples = np.asarray(decoded.samples, dtype=np.float32)
+            sr = int(decoded.sample_rate) or 24000
+            if sr != 24000 and len(samples):
+                n = int(len(samples) * 24000 / sr)
+                xo = np.linspace(0, 1, len(samples), endpoint=False)
+                xn = np.linspace(0, 1, n, endpoint=False)
+                samples = np.interp(xn, xo, samples).astype(np.float32)
+            pcm = (np.clip(samples, -1, 1) * 32767).astype(np.int16).tobytes()
+            # ~50 ms slices — matches the phone player's PCM framing
+            for i in range(0, len(pcm), 2400):
+                if self._cancelled:
+                    break
+                if self._stream_cb is not None:
+                    try:
+                        self._stream_cb(pcm[i : i + 2400])
+                    except Exception:
+                        break
+        except Exception as e:
+            print(f"[Jarvis] Voice stream error: {e}")
+        finally:
+            with self._lock:
+                self._streaming = False
+
+    async def _synth_async(self, text: str, edge_tts) -> bytes:
+        comm = edge_tts.Communicate(text, self._voice)
+        buf = bytearray()
+        async for chunk in comm.stream():
+            if chunk["type"] == "audio":
+                buf.extend(chunk["data"])
+        return bytes(buf)
+
+
 class JarvisLive:
 
     def __init__(self, ui: JarvisUI):
@@ -891,6 +1158,7 @@ class JarvisLive:
         self._is_speaking         = False
         self._speaking_lock       = threading.Lock()
         self._phone_active        = False   # True while phone mic is streaming; pauses PC mic
+        self._phone_headphones_active = False  # True when a phone runs Headphones Mode → PC speaker muted
         self._last_frame: bytes | None = None   # newest live camera frame
         self._pending_vision       = None    # (img_bytes, mime_type, question, angle) to inject after tool response
         self._vision_cam_active    = False   # True if camera was opened for vision → auto-close after response
@@ -902,6 +1170,32 @@ class JarvisLive:
         self.ui.on_remote_clicked = self._make_remote_key
         self.ui.on_interrupt      = self.interrupt
         self._turn_done_event: asyncio.Event | None = None
+
+        # ── Headphones mode (🎧) ──────────────────────────────────────────
+        # Audio devices used by the live mic/playback streams: (input_idx, output_idx).
+        # None = OS default.  Bumped every time the routing changes so the
+        # _listen_audio / _play_audio loops reopen their streams.
+        self._headphones    = HeadphonesManager(
+            on_button=self._on_headphone_button,
+            on_status_changed=self._on_headphone_status_changed,
+        )
+        self._audio_devices = (None, None)
+        self._audio_gen     = 0
+        self.ui.on_headphones_toggle = self._ui_toggle_headphones
+
+        # ── TTS voice module (🎙) ───────────────────────────────────────────
+        # PC: the AI speaks as always (its own audio plays through the PC).
+        # Phone headphones mode: the AI's audio is discarded and the reply is
+        # voiced by the Jarvis Voice Module (EdgeTTS, deep British male)
+        # streamed to the phone's headphones — exactly one voice.
+        self._pc_tts       = None          # local PC TTS bridge (optional mode)
+        self._jarvis_tts   = None          # Jarvis voice streaming bridge (phone)
+
+        # ── Internet tunnel (🌐) — access EDIT over mobile data ────────────
+        self._tunnel      = TunnelManager(
+            port=8000, static_url=TunnelManager.static_url()
+        )
+        self.ui.on_internet_toggle = self._ui_toggle_internet
         self._dashboard     = None
         self._briefing_sent    = False          # morning briefing fires once per process
         self._sys_monitor      = SystemMonitor()  # persistent cooldown state
@@ -944,6 +1238,7 @@ class JarvisLive:
     def interrupt(self) -> None:
         """Stop JARVIS mid-speech: drain queued audio and open mic immediately."""
         self._interrupted = True
+        self._cancel_tts()          # TTS voice module stops instantly
         q = self.audio_in_queue
         if q:
             drained = 0
@@ -959,6 +1254,383 @@ class JarvisLive:
         if self._turn_done_event:
             self._turn_done_event.clear()
         self.ui.write_log("SYS: Interrupted — listening...")
+
+    # ── Headphones mode (🎧) ────────────────────────────────────────────────
+    # Flow: the UI toggle or the Remote Dashboard button calls
+    #   _ui_toggle_headphones / _dashboard_headphones_cb → _headphones_toggle_task.
+    # Routing is applied by HeadphonesManager (sd.default + device indices),
+    # the live streams reopen via self._audio_gen, and the headphone's own
+    # multifunction button triggers _on_headphone_button → interrupt + listen.
+
+    def _ui_toggle_headphones(self) -> None:
+        """Called from the Qt thread when the 🎧 button is pressed."""
+        if not self._loop:
+            return
+        try:
+            asyncio.run_coroutine_threadsafe(
+                self._headphones_toggle_task(), self._loop
+            )
+        except Exception as e:
+            print(f"[Headphones] UI toggle error: {e}")
+
+    async def _dashboard_headphones_cb(self, enabled: bool | None = None) -> dict:
+        """Async callback for the Remote Dashboard /api/headphones endpoint."""
+        if enabled is None:
+            return self._headphones.status()
+        return await self._headphones_toggle_task(bool(enabled))
+
+    async def _headphones_toggle_task(self, enabled: bool | None = None) -> dict:
+        """Turn headphone mode on/off and push the new status everywhere."""
+        try:
+            if enabled is None:
+                enabled = not self._headphones.enabled
+            status = await asyncio.to_thread(
+                self._headphones.set_enabled, bool(enabled)
+            )
+            self._apply_headphone_audio(status)
+            self.ui.update_headphones_btn(status)
+
+            if enabled:
+                if status.get("connected"):
+                    name = status.get("name") or "Bluetooth headphones"
+                    self.ui.write_log(f"🎧 Headphones mode: ON — {name}")
+                else:
+                    self.ui.write_log(
+                        "🎧 Headphones mode: ON — Bluetooth headphones not "
+                        "detected, audio stays on the default devices"
+                    )
+            else:
+                self.ui.write_log(
+                    "🎧 Headphones mode: OFF — audio back to default devices"
+                )
+
+            # Persist the preference so it survives restarts
+            self._save_headphones_pref(bool(enabled))
+
+            if self._dashboard:
+                try:
+                    await self._dashboard.broadcast(
+                        {"type": "headphones", "status": status}
+                    )
+                except Exception:
+                    pass
+            return status
+        except Exception as e:
+            print(f"[Headphones] Toggle error: {e}")
+            traceback.print_exc()
+            return self._headphones.status()
+
+    def _apply_headphone_audio(self, status: dict | None = None) -> None:
+        """Point the live mic/playback streams at the headphone devices."""
+        if status is None:
+            status = self._headphones.status()
+        if status.get("enabled") and status.get("connected"):
+            self._audio_devices = (
+                status.get("input_idx"),
+                status.get("output_idx"),
+            )
+        else:
+            self._audio_devices = (None, None)
+        self._audio_gen += 1   # _listen_audio / _play_audio reopen their streams
+
+    def _save_headphones_pref(self, enabled: bool) -> None:
+        try:
+            with open(API_CONFIG_PATH, "r+", encoding="utf-8") as f:
+                cfg = json.load(f)
+                cfg["headphones_mode"] = bool(enabled)
+                f.seek(0)
+                json.dump(cfg, f, indent=4, ensure_ascii=False)
+                f.truncate()
+        except Exception:
+            pass
+
+    def _load_headphones_pref(self) -> bool:
+        try:
+            with open(API_CONFIG_PATH, "r", encoding="utf-8") as f:
+                return bool(json.load(f).get("headphones_mode", False))
+        except Exception:
+            return False
+
+    def _wake_bracket_enabled(self) -> bool:
+        """Wake Bracket Protocol — 'EDIT … command … EDIT' framing."""
+        try:
+            with open(API_CONFIG_PATH, "r", encoding="utf-8") as f:
+                return bool(json.load(f).get("wake_bracket", True))
+        except Exception:
+            return True
+
+    def _tts_voice_mode(self) -> bool:
+        """TTS voice module on the PC: replies voiced by the PC TTS engine.
+        Default OFF — the PC speaks with the AI's own voice as always."""
+        try:
+            with open(API_CONFIG_PATH, "r", encoding="utf-8") as f:
+                return bool(json.load(f).get("tts_voice_mode", False))
+        except Exception:
+            return False
+
+    def _jarvis_voice(self) -> str:
+        """EdgeTTS voice used by the Jarvis Voice Module (phone headphones)."""
+        try:
+            with open(API_CONFIG_PATH, "r", encoding="utf-8") as f:
+                return str(
+                    json.load(f).get("tts_jarvis_voice", "ru-RU-DmitryNeural")
+                ).strip() or "ru-RU-DmitryNeural"
+        except Exception:
+            return "ru-RU-DmitryNeural"
+
+    def _save_tts_voice_mode(self, enabled: bool) -> None:
+        try:
+            with open(API_CONFIG_PATH, "r+", encoding="utf-8") as f:
+                cfg = json.load(f)
+                cfg["tts_voice_mode"] = bool(enabled)
+                f.seek(0)
+                json.dump(cfg, f, indent=4, ensure_ascii=False)
+                f.truncate()
+        except Exception:
+            pass
+
+    def _save_wake_bracket(self, enabled: bool) -> None:
+        try:
+            with open(API_CONFIG_PATH, "r+", encoding="utf-8") as f:
+                cfg = json.load(f)
+                cfg["wake_bracket"] = bool(enabled)
+                f.seek(0)
+                json.dump(cfg, f, indent=4, ensure_ascii=False)
+                f.truncate()
+        except Exception:
+            pass
+
+    def _on_headphone_button(self) -> None:
+        """Headphone multifunction button pressed (AVRCP play/pause).
+
+        EDIT stops talking and opens the mic — push-to-listen through the
+        headset.  Runs in the keyboard-hook thread; marshal into the loop.
+        """
+        if not self._headphones.enabled or not self._loop:
+            return
+        try:
+            asyncio.run_coroutine_threadsafe(
+                self._headphone_button_task(), self._loop
+            )
+        except Exception as e:
+            print(f"[Headphones] Button relay error: {e}")
+
+    async def _headphone_button_task(self) -> None:
+        with self._speaking_lock:
+            was_speaking = self._is_speaking
+        turn_already_done = bool(
+            self._turn_done_event and self._turn_done_event.is_set()
+        )
+        audio_in_flight = bool(
+            self.audio_in_queue is not None and not self.audio_in_queue.empty()
+        )
+        self.interrupt()
+
+        # interrupt() sets self._interrupted so the in-flight response audio is
+        # discarded until the interrupted turn completes.  But if EDIT was
+        # silent (or that turn already completed) no new turn_complete will
+        # arrive, and a stuck flag would mute the user's NEXT reply — so clear
+        # it right away in that case.  For a genuine mid-turn interrupt we keep
+        # discarding (fast path: turn_complete clears the flag) with a 6 s
+        # safety net in case Gemini never finishes the turn.
+        if not was_speaking and not audio_in_flight:
+            self._interrupted = False
+        elif turn_already_done:
+            self._interrupted = False
+        else:
+            async def _safety_clear():
+                await asyncio.sleep(6.0)
+                self._interrupted = False
+            asyncio.create_task(_safety_clear())
+
+        self.ui.write_log("🎧 Headphone button — EDIT listening…")
+        if self._dashboard:
+            try:
+                await self._dashboard.broadcast(
+                    {"type": "headphones", "action": "listen"}
+                )
+            except Exception:
+                pass
+
+    async def _on_phone_headphone_button(self) -> None:
+        """Phone-side headphone button pressed (headphones on the phone).
+
+        The Remote Dashboard catches the AVRCP play/pause press via the
+        browser mediaSession API and calls /api/headphones/button → here:
+        EDIT stops talking so the phone-mic stream (= headset mic) is heard.
+        """
+        self.interrupt()
+        self.ui.write_log("🎧 Headphone button (phone) — EDIT listening…")
+        if self._dashboard:
+            try:
+                await self._dashboard.broadcast(
+                    {"type": "headphones", "action": "listen"}
+                )
+            except Exception:
+                pass
+
+    async def _set_phone_headphones_mode(self, active: bool) -> dict:
+        """Phone reported its Headphones Mode turned on/off.
+
+        While ON, EDIT's voice plays ONLY through the phone (= the Bluetooth
+        headphones connected to it) via the phone's own TTS module, and the
+        PC speaker is muted — otherwise the user hears two voices.
+        """
+        self._phone_headphones_active = bool(active)
+        self._audio_gen += 1   # _play_audio reopens (or skips) the PC stream
+        if active:
+            self.ui.write_log(
+                "🎧 Phone headphones mode ON — EDIT speaks only through the "
+                "phone (PC speakers muted)"
+            )
+        else:
+            self.ui.write_log(
+                "🎧 Phone headphones mode OFF — PC audio restored"
+            )
+        return {"enabled": self._phone_headphones_active}
+
+    def _on_headphone_status_changed(self, status: dict) -> None:
+        """Called by HeadphonesManager's monitor when BT devices (dis)connect."""
+        try:
+            self._apply_headphone_audio(status)
+            self.ui.update_headphones_btn(status)
+            if self._loop:
+                asyncio.run_coroutine_threadsafe(
+                    self._broadcast_headphone_status(status), self._loop
+                )
+        except Exception as e:
+            print(f"[Headphones] Status change error: {e}")
+
+    async def _broadcast_headphone_status(self, status: dict) -> None:
+        if self._dashboard:
+            try:
+                await self._dashboard.broadcast(
+                    {"type": "headphones", "status": status}
+                )
+            except Exception:
+                pass
+
+    # ── Internet tunnel (🌐) — EDIT from anywhere over mobile data ─────────
+
+    def _ui_toggle_internet(self) -> None:
+        """Called from the Qt thread when the 🌐 button is pressed."""
+        if not self._loop:
+            return
+        try:
+            asyncio.run_coroutine_threadsafe(
+                self._internet_toggle_task(), self._loop
+            )
+        except Exception as e:
+            print(f"[Tunnel] UI toggle error: {e}")
+
+    async def _internet_toggle_task(self, enabled: bool | None = None) -> dict:
+        """Start/stop the public tunnel and push the status everywhere."""
+        try:
+            if enabled is None:
+                enabled = not self._tunnel.active
+            if enabled:
+                st = await asyncio.to_thread(self._tunnel.start, 35.0)
+                if st.get("error") == "no_tunnel_binary":
+                    self.ui.write_log("🌐 Tunnel engine missing — see log for install steps")
+                    self.ui.show_content(
+                        "🌐 INTERNET ACCESS — install tunnel",
+                        st.get("hint", ""),
+                    )
+                    return st
+                TunnelManager.set_enabled(True)
+                url = st.get("url") or ""
+                if url:
+                    self.ui.write_log(f"🌐 INTERNET ACCESS: {url}")
+                    self.ui.show_content(
+                        "🌐 INTERNET ACCESS — EDIT (мобильный интернет)",
+                        f"{url}\n\nОткрой этот адрес на телефоне — тот же Remote "
+                        "Dashboard, режим наушников 🎧 и всё остальное работают "
+                        "через мобильный интернет. Первый вход: PIN из "
+                        "Remote Control (телефон с запомненным токеном входит сам).",
+                    )
+                else:
+                    self.ui.write_log("🌐 Tunnel started but URL not ready yet")
+            else:
+                await asyncio.to_thread(self._tunnel.stop)
+                TunnelManager.set_enabled(False)
+                self.ui.write_log("🌐 INTERNET ACCESS: OFF")
+            self.ui.update_internet_btn(self._tunnel.status())
+            return self._tunnel.status()
+        except Exception as e:
+            print(f"[Tunnel] Error: {e}")
+            traceback.print_exc()
+            return self._tunnel.status()
+
+    def _maybe_start_internet_tunnel(self) -> None:
+        """Auto-start the public tunnel at boot if enabled in the config."""
+        if TunnelManager.enabled() and not self._tunnel.active:
+            asyncio.create_task(self._internet_toggle_task(True))
+
+    # ── TTS voice module — the AI does not speak, this module does ─────────
+
+    def _tts_mode_on(self) -> bool:
+        """True when replies must be voiced by the TTS module (never the AI)."""
+        return self._tts_voice_mode() or self._phone_headphones_active
+
+    @staticmethod
+    def _jarvis_available() -> bool:
+        """Dependencies of the Jarvis Voice Module (EdgeTTS + miniaudio)."""
+        try:
+            import edge_tts      # noqa: F401
+            import miniaudio     # noqa: F401
+            return True
+        except Exception:
+            return False
+
+    async def _dispatch_tts(self, text: str) -> None:
+        """Voice `text` through the dedicated TTS module.
+
+        Phone Headphones Mode → the Jarvis Voice Module (EdgeTTS deep British
+        male on the PC) streamed to the phone's single sink tab; falls back to
+        the phone's own speechSynthesis if the module's deps are missing.
+        Otherwise → the PC TTS engine (EdgeTTS/Kokoro) on the PC speakers.
+        """
+        if self._phone_headphones_active and self._dashboard:
+            if self._jarvis_available():
+                if self._jarvis_tts is None:
+                    self._jarvis_tts = _TTSBridge(
+                        stream_cb=self._dashboard.feed_audio,
+                        voice=self._jarvis_voice(),
+                    )
+                self._jarvis_tts.speak(text)
+            else:
+                try:
+                    await self._dashboard.send_tts(text)   # phone speechSynthesis
+                except Exception:
+                    pass
+            self.set_speaking(True)
+            return
+        if self._pc_tts is None:
+            self._pc_tts = _TTSBridge()
+        self._pc_tts.speak(text)
+        self.set_speaking(True)
+
+    def _cancel_tts(self) -> None:
+        """Stop the TTS voice instantly (interrupt / headphone button)."""
+        if self._pc_tts is not None:
+            self._pc_tts.clear()
+        if self._jarvis_tts is not None:
+            self._jarvis_tts.clear()
+        if self._dashboard:
+            try:
+                self._dashboard.clear_audio()   # drop buffered phone PCM
+            except Exception:
+                pass
+            if self._loop:
+                try:
+                    asyncio.run_coroutine_threadsafe(
+                        self._dashboard.broadcast(
+                            {"type": "tts", "text": "", "cancel": True}
+                        ),
+                        self._loop,
+                    )
+                except Exception:
+                    pass
 
     def speak(self, text: str):
         if not self._loop or not self.session:
@@ -1019,6 +1691,16 @@ class JarvisLive:
             parts.append(mem_str)
         parts.append(sys_prompt)
 
+        # Wake Bracket Protocol — voice commands are framed as
+        # "EDIT … command … EDIT"; EDIT answers only what is between them.
+        if self._wake_bracket_enabled():
+            parts.append(_WAKE_BRACKET_PROTOCOL)
+
+        # The live models (audio-native) only support AUDIO modality — TEXT-only
+        # sessions are rejected (error 1007).  So the session always runs with
+        # AUDIO, but when the TTS voice module is enabled the incoming AI audio
+        # is DISCARDED and the output transcription is voiced by the dedicated
+        # TTS module (phone speechSynthesis / PC EdgeTTS).  Exactly one voice.
         return types.LiveConnectConfig(
             response_modalities=["AUDIO"],
             output_audio_transcription={},
@@ -1330,6 +2012,97 @@ class JarvisLive:
                     _os._exit(0)
                 asyncio.create_task(_do_shutdown())
 
+            elif name == "headphones_mode":
+                if args.get("status_only"):
+                    status = self._headphones.status()
+                else:
+                    status = await self._headphones_toggle_task(
+                        bool(args.get("enabled", not self._headphones.enabled))
+                    )
+                if status.get("enabled"):
+                    if status.get("connected"):
+                        result = (
+                            "Headphones mode is ON. EDIT speaks through "
+                            f"{status.get('name') or 'Bluetooth headphones'} "
+                            "and hears you through the headset mic. "
+                            "Press the button on the headphones to make me listen."
+                        )
+                    else:
+                        result = (
+                            "Headphones mode is ON, but no Bluetooth headphones "
+                            "are currently connected — audio stays on the default "
+                            "devices. Connect them and I will switch automatically."
+                        )
+                else:
+                    result = "Headphones mode is OFF — audio uses the default devices."
+                self.ui.update_headphones_btn(status)
+
+            elif name == "wake_protocol":
+                enabled = bool(args.get("enabled", True))
+                self._save_wake_bracket(enabled)
+                self.ui.write_log(
+                    "SYS: Wake Bracket Protocol — "
+                    + ("ON ('EDIT … команда … EDIT')" if enabled else "OFF")
+                )
+                if enabled:
+                    result = (
+                        "Wake bracket protocol is ON. From the next connection, "
+                        "I answer only what you say between two standalone 'EDIT' "
+                        "words: say EDIT, then your command, then EDIT again."
+                    )
+                else:
+                    result = (
+                        "Wake bracket protocol is OFF. From the next connection "
+                        "I respond normally to everything you say."
+                    )
+
+            elif name == "tts_voice":
+                enabled = bool(args.get("enabled", True))
+                if not enabled and self._phone_headphones_active:
+                    result = (
+                        "Phone Headphones Mode requires the TTS voice module — "
+                        "it stays ON so your headphones keep working."
+                    )
+                else:
+                    self._save_tts_voice_mode(enabled)
+                    self.ui.write_log(
+                        "SYS: TTS voice module — "
+                        + ("ON (AI does not speak)" if enabled else "OFF (AI speaks)")
+                    )
+                    self._cancel_tts()
+                    if enabled:
+                        result = (
+                            "TTS voice module is ON — my replies are voiced by "
+                            "the TTS module from now on."
+                        )
+                    else:
+                        result = (
+                            "TTS voice module is OFF — the AI speaks directly "
+                            "from now on."
+                        )
+
+            elif name == "internet_access":
+                if args.get("status_only"):
+                    st = self._tunnel.status()
+                else:
+                    st = await self._internet_toggle_task(
+                        bool(args.get("enabled", not self._tunnel.active))
+                    )
+                if st.get("active") or st.get("url"):
+                    result = (
+                        "Internet access is ON. Open this address on your phone "
+                        "to use EDIT from anywhere, even on mobile data without "
+                        f"WiFi: {st.get('url') or ''}"
+                    )
+                elif st.get("error") == "no_tunnel_binary":
+                    result = (
+                        "Internet tunnel needs a tunnel program installed on the "
+                        "PC: Cloudflare (cloudflared) or ngrok. See the on-screen "
+                        "instructions."
+                    )
+                else:
+                    result = "Internet access is OFF — EDIT is reachable only on the local network."
+
             else:
                 from actions.self_improve import is_custom_skill, run_custom_skill
                 if is_custom_skill(name):
@@ -1364,27 +2137,49 @@ class JarvisLive:
         def callback(indata, frames, time_info, status):
             with self._speaking_lock:
                 jarvis_speaking = self._is_speaking
-            if not jarvis_speaking and not self.ui.muted and not self._phone_active:
+            if (
+                not jarvis_speaking
+                and not self.ui.muted
+                and not self._phone_active
+                and not self._phone_headphones_active
+                and not (self._pc_tts is not None and self._pc_tts.playing)
+            ):
                 data = indata.tobytes()
                 loop.call_soon_threadsafe(
                     self.out_queue.put_nowait,
                     {"data": data, "mime_type": "audio/pcm"}
                 )
 
-        try:
-            with sd.InputStream(
-                samplerate=SEND_SAMPLE_RATE,
-                channels=CHANNELS,
-                dtype="int16",
-                blocksize=CHUNK_SIZE,
-                callback=callback,
-            ):
-                print("[JARVIS] 🎤 Mic stream open")
-                while True:
-                    await asyncio.sleep(0.1)
-        except Exception as e:
-            print(f"[JARVIS] ❌ Mic: {e}")
-            raise
+        # Device-aware loop: restarts the stream with a new device whenever
+        # headphone mode reroutes the audio (self._audio_gen changes).
+        while True:
+            gen = self._audio_gen
+            dev = self._audio_devices[0] if self._audio_devices else None
+            try:
+                with sd.InputStream(
+                    device=dev,
+                    samplerate=SEND_SAMPLE_RATE,
+                    channels=CHANNELS,
+                    dtype="int16",
+                    blocksize=CHUNK_SIZE,
+                    callback=callback,
+                ):
+                    print(f"[JARVIS] 🎤 Mic stream open (device={dev})")
+                    while self._audio_gen == gen:
+                        await asyncio.sleep(0.1)
+            except asyncio.CancelledError:
+                raise
+            except Exception as e:
+                print(f"[JARVIS] ❌ Mic: {e}")
+                if self._audio_gen == gen:
+                    if dev is not None:
+                        # Stale device (headset unplugged) → drop to default
+                        print("[JARVIS] Mic device unavailable — using default")
+                        self._audio_devices = (None, self._audio_devices[1])
+                        self._audio_gen += 1
+                        await asyncio.sleep(1.0)
+                        continue
+                    raise
 
     async def _receive_audio(self):
         print("[JARVIS] 👂 Recv started")
@@ -1395,8 +2190,12 @@ class JarvisLive:
                 async for response in self.session.receive():
 
                     if response.data:
-                        if self._interrupted:
-                            pass  # discard: interrupted
+                        if self._interrupted or self._tts_mode_on():
+                            # Interrupted OR TTS voice module: the AI's own
+                            # audio is discarded — it is never played on the PC
+                            # and never streamed to the phone (the reply text is
+                            # voiced by the TTS module instead).
+                            pass
                         else:
                             if self._turn_done_event and self._turn_done_event.is_set():
                                 self._turn_done_event.clear()
@@ -1424,6 +2223,10 @@ class JarvisLive:
                             if txt:
                                 in_buf.append(txt)
                                 self._last_user_speech = time.monotonic()
+
+                        if getattr(sc, "interrupted", False):
+                            # Gemini was interrupted — stop the TTS voice now
+                            self._cancel_tts()
 
                         if sc.turn_complete:
                             if self._turn_done_event:
@@ -1459,6 +2262,10 @@ class JarvisLive:
                                         "text": full_out,
                                         "ts": datetime.now().isoformat(),
                                     }))
+                                # TTS voice module: voice the complete reply
+                                # through the dedicated TTS (phone or PC).
+                                if self._tts_mode_on() and not self._interrupted:
+                                    await self._dispatch_tts(full_out)
                             out_buf = []
 
                             # Vision injection: model finished tool-response turn → now send the image
@@ -1509,54 +2316,86 @@ class JarvisLive:
     async def _play_audio(self):
         print("[JARVIS] 🔊 Play started")
 
-        stream = sd.RawOutputStream(
-            samplerate=RECEIVE_SAMPLE_RATE,
-            channels=CHANNELS,
-            dtype="int16",
-            blocksize=CHUNK_SIZE,
-        )
-        stream.start()
-
-        try:
-            while True:
+        # Device-aware loop: restarts the stream whenever headphone mode
+        # reroutes the audio (self._audio_gen changes).
+        while True:
+            gen = self._audio_gen
+            dev = self._audio_devices[1] if self._audio_devices else None
+            stream = None
+            # Phone Headphones Mode / TTS voice module: the AI's audio is
+            # discarded, so the PC output stream stays closed — no sound from
+            # the PC speaker at all.
+            if not self._phone_headphones_active and not self._tts_voice_mode():
                 try:
-                    chunk = await asyncio.wait_for(
-                        self.audio_in_queue.get(),
-                        timeout=0.1
+                    stream = sd.RawOutputStream(
+                        device=dev,
+                        samplerate=RECEIVE_SAMPLE_RATE,
+                        channels=CHANNELS,
+                        dtype="int16",
+                        blocksize=CHUNK_SIZE,
                     )
-                except asyncio.TimeoutError:
-                    if (
-                        self._turn_done_event
-                        and self._turn_done_event.is_set()
-                        and self.audio_in_queue.empty()
-                    ):
-                        self.set_speaking(False)
-                        self._turn_done_event.clear()
-                    continue
+                    stream.start()
+                except Exception as e:
+                    print(f"[JARVIS] ❌ Play: {e}")
+                    if self._audio_gen == gen and dev is not None:
+                        # Stale device (headset unplugged) → drop to default
+                        print("[JARVIS] Play device unavailable — using default")
+                        self._audio_devices = (self._audio_devices[0], None)
+                        self._audio_gen += 1
+                        await asyncio.sleep(1.0)
+                        continue
+                    raise
 
-                self.set_speaking(True)
-
-                # Batch all immediately-available chunks into one write to reduce
-                # thread-pool round-trips (was one asyncio.to_thread per 50ms slice).
-                # Cap at ~200 ms so interrupt() still stops audio within ~200 ms.
-                batch = bytearray(chunk)
-                while len(batch) < 9600:   # 9600 bytes ≈ 200 ms at 24 kHz / 16-bit mono
+            try:
+                while self._audio_gen == gen:
                     try:
-                        batch.extend(self.audio_in_queue.get_nowait())
-                    except asyncio.QueueEmpty:
-                        break
+                        chunk = await asyncio.wait_for(
+                            self.audio_in_queue.get(),
+                            timeout=0.1
+                        )
+                    except asyncio.TimeoutError:
+                        if (
+                            self._turn_done_event
+                            and self._turn_done_event.is_set()
+                            and self.audio_in_queue.empty()
+                        ):
+                            self.set_speaking(False)
+                            self._turn_done_event.clear()
+                        continue
 
-                try:
-                    await asyncio.to_thread(stream.write, bytes(batch))
-                except (RuntimeError, asyncio.CancelledError):
-                    break   # executor shutting down — exit cleanly
-        except Exception as e:
-            print(f"[JARVIS] ❌ Play: {e}")
-            raise
-        finally:
-            self.set_speaking(False)
-            stream.stop()
-            stream.close()
+                    self.set_speaking(True)
+
+                    # Batch all immediately-available chunks into one write to reduce
+                    # thread-pool round-trips (was one asyncio.to_thread per 50ms slice).
+                    # Cap at ~200 ms so interrupt() still stops audio within ~200 ms.
+                    batch = bytearray(chunk)
+                    while len(batch) < 9600:   # 9600 bytes ≈ 200 ms at 24 kHz / 16-bit mono
+                        try:
+                            batch.extend(self.audio_in_queue.get_nowait())
+                        except asyncio.QueueEmpty:
+                            break
+
+                    if stream is None:
+                        # Phone Headphones Mode — the phone plays this audio;
+                        # just keep consuming so the queue never fills.
+                        continue
+                    try:
+                        await asyncio.to_thread(stream.write, bytes(batch))
+                    except (RuntimeError, asyncio.CancelledError):
+                        if self._audio_gen == gen:
+                            raise   # executor shutting down — exit cleanly
+                        break      # device swap in progress — reopen stream
+            finally:
+                self.set_speaking(False)
+                if stream is not None:
+                    try:
+                        stream.stop()
+                    except Exception:
+                        pass
+                    try:
+                        stream.close()
+                    except Exception:
+                        pass
 
     # ── Morning briefing ────────────────────────────────────────────────────────
 
@@ -2144,6 +2983,9 @@ class JarvisLive:
             self._dashboard = DashboardServer()
             self._dashboard.set_connect_callback(self._on_phone_connected)
             self._dashboard.set_holo_callback(self.ui.show_holo_project)
+            self._dashboard.set_headphones_callback(self._dashboard_headphones_cb)
+            self._dashboard.set_headphones_button_callback(self._on_phone_headphone_button)
+            self._dashboard.set_phone_headphones_callback(self._set_phone_headphones_mode)
             asyncio.create_task(self._dashboard.serve())
             # Wire the Remote overlay's device hub (list + kick + revoke)
             def _kick_device(did: str) -> None:
@@ -2165,6 +3007,14 @@ class JarvisLive:
         except Exception as e:
             print(f"[Dashboard] Disabled: {e}")
             self._dashboard = None
+
+        # Headphones mode — re-apply persisted preference at startup so the
+        # routing is active before the first session connects
+        if self._load_headphones_pref():
+            asyncio.create_task(self._headphones_toggle_task(True))
+
+        # Internet tunnel — auto-start if enabled (access over mobile data)
+        self._maybe_start_internet_tunnel()
 
         while True:
             try:
