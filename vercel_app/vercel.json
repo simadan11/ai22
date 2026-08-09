@@ -1,0 +1,21 @@
+{
+  "version": 2,
+  "builds": [
+    { "src": "api/**/*.py", "use": "@vercel/python" }
+  ],
+  "routes": [
+    { "src": "/api/health",            "dest": "api/health.py" },
+    { "src": "/api/auth",              "dest": "api/auth.py" },
+    { "src": "/api/command",           "dest": "api/command.py" },
+    { "src": "/api/queue",             "dest": "api/queue.py" },
+    { "src": "/api/headphones/status", "dest": "api/headphones/status.py" },
+    { "src": "/api/headphones/toggle", "dest": "api/headphones/toggle.py" },
+    { "src": "/api/headphones/log",    "dest": "api/headphones/log.py" },
+    { "src": "/(.*)",                  "dest": "/public/$1" }
+  ],
+  "env": {
+    "APP_NAME": "EDIT Mobile",
+    "ASSISTANT_NAME": "EDIT",
+    "USER_NAME": "Владелец"
+  }
+}
